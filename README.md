@@ -1,2 +1,2 @@
-# langchain
-To practice langchain
+# Hybrid_Job_Recommendation_System
+To practice Hybrid_Job_Recommendation_System
