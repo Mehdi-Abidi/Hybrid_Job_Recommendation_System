@@ -6,6 +6,9 @@ data:
   interactions_file: interactions.csv
   kaggle_dataset: airiddha/trainrev1
   use_synthetic: false
+  # source: 'real' builds canonical CSVs from postings.csv + Resume.csv on first run;
+  # 'canonical' reads jobs_file/users_file/interactions_file directly from raw_path.
+  source: real
   synthetic:
     n_users: 1000
     n_jobs: 5000

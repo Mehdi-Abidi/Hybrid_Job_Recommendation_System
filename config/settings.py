@@ -25,6 +25,7 @@ class DataCfg:
     kaggle_dataset: str
     use_synthetic: bool
     synthetic: SyntheticCfg
+    source: str = "canonical"  # 'real' | 'canonical'
 
 
 @dataclass
@@ -72,6 +73,7 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
         kaggle_dataset=raw["data"]["kaggle_dataset"],
         use_synthetic=raw["data"]["use_synthetic"],
         synthetic=SyntheticCfg(**raw["data"]["synthetic"]),
+        source=raw["data"].get("source", "canonical"),
     )
     split = SplitCfg(**raw["split"])
 

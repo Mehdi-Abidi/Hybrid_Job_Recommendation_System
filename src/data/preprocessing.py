@@ -92,9 +92,22 @@ class DataPreprocessor:
     def __init__(self, cfg: Settings):
         self.cfg = cfg
 
-    # Load raw CSVs.
+    # Load raw CSVs. If data.source == 'real', first build canonical CSVs from
+    # postings.csv + Resume.csv into data/processed/real/ and read those.
     def load_raw(self) -> dict[str, pd.DataFrame]:
         raw = self.cfg.path("raw")
+        if getattr(self.cfg.data, "source", "canonical") == "real":
+            from src.data.real_data_adapter import build_real_dataset
+            real_dir = self.cfg.path("processed") / "real"
+            needed = ["jobs.csv", "users.csv", "interactions.csv"]
+            if not all((real_dir / f).exists() for f in needed):
+                log.info("Building canonical dataset from real sources in %s", raw)
+                build_real_dataset(raw, real_dir, seed=self.cfg.split.seed)
+            return {
+                "jobs": pd.read_csv(real_dir / "jobs.csv"),
+                "users": pd.read_csv(real_dir / "users.csv"),
+                "interactions": pd.read_csv(real_dir / "interactions.csv"),
+            }
         return {
             "jobs": pd.read_csv(raw / self.cfg.data.jobs_file),
             "users": pd.read_csv(raw / self.cfg.data.users_file),
