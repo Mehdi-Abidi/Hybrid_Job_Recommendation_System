@@ -43,7 +43,7 @@ class ResumeNER:
     """Pattern-based resume parser. Optionally augments skill detection via a provided
     skill vocabulary (e.g., from the SkillOntology)."""
 
-    def __init__(self, skill_vocab: Iterable[str] | None = None, use_spacy: bool = False):
+    def __init__(self, skill_vocab: Iterable[str] | None = None, use_spacy: bool = True):
         self.skill_vocab = sorted({s.lower() for s in (skill_vocab or [])}, key=len, reverse=True)
         self._skill_pat = re.compile(
             r"\b(" + "|".join(re.escape(s) for s in self.skill_vocab) + r")\b",

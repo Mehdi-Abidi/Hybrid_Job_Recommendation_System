@@ -21,6 +21,7 @@ import re
 import numpy as np
 import pandas as pd
 
+from src.nlp.resume_ner import ResumeNER
 from src.ontology.skill_ontology import SkillOntology
 from src.utils.logging import get_logger
 
@@ -157,10 +158,12 @@ def adapt_postings(postings_path: Path, ontology: SkillOntology,
 
 def adapt_resumes(resumes_path: Path, ontology: SkillOntology,
                   jobs: pd.DataFrame, seed: int = 42) -> pd.DataFrame:
-    """Resume.csv -> canonical users.csv schema. One user per resume."""
+    """Resume.csv -> canonical users.csv schema. One user per resume.
+    Uses ResumeNER (spaCy if installed, regex otherwise) for richer skill/experience extraction."""
     df = pd.read_csv(resumes_path, low_memory=False)
     log.info("Adapting %d resumes", len(df))
     rng = np.random.default_rng(seed)
+    ner = ResumeNER(skill_vocab=ontology.all_skills(), use_spacy=True)
 
     locations = jobs["location"].value_counts().head(20).index.tolist() or ["Remote"]
 
@@ -177,13 +180,18 @@ def adapt_resumes(resumes_path: Path, ontology: SkillOntology,
         np.where(text_lower.str.contains(r"\b(?:junior|jr\.|intern|entry)\b", regex=True), "junior", "mid")),
     )
 
-    # Experience years proportional to resume length, clipped to realistic range.
+    # Extract entities via NER (experience years + skills); fall back to heuristics per row.
+    ner_out = [ner.parse(t) for t in out["resume_text"]]
     lengths = out["resume_text"].str.len().to_numpy()
-    out["experience_years"] = np.clip((lengths // 250), 1, 25).astype(int)
+    out["experience_years"] = [
+        e.experience_years if e.experience_years > 0 else int(np.clip(l // 250, 1, 25))
+        for e, l in zip(ner_out, lengths)
+    ]
     out["preferred_location"] = rng.choice(locations, size=len(df))
-
-    # Skills: extract from resume text using ontology.
-    out["skills"] = out["resume_text"].apply(lambda x: ",".join(_extract_skills(x, ontology)))
+    out["skills"] = [
+        ",".join(sorted(set(e.skills) | set(_extract_skills(t, ontology))))
+        for e, t in zip(ner_out, out["resume_text"])
+    ]
 
     return out[["user_id", "primary_category", "seniority", "experience_years",
                 "preferred_location", "skills", "resume_text"]]
