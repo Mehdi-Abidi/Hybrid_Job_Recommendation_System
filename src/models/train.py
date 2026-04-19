@@ -13,6 +13,8 @@ Pipeline:
 
 Run: `python -m src.models.train` (uses config/config.yaml)."""
 from __future__ import annotations
+from dotenv import load_dotenv
+load_dotenv()
 from pathlib import Path
 from typing import Any
 import argparse

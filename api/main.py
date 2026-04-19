@@ -3,6 +3,8 @@
 Artifacts are loaded lazily on the first request via the AppState singleton. This
 keeps uvicorn startup fast and test code can inject its own state."""
 from __future__ import annotations
+from dotenv import load_dotenv
+load_dotenv()
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
