@@ -20,11 +20,11 @@ log = get_logger(__name__)
 
 @dataclass
 class DeepFMConfig:
-    emb_dim: int = 8
-    mlp_dims: tuple[int, ...] = (64, 32)
+    emb_dim: int = 16
+    mlp_dims: tuple[int, ...] = (128, 64)
     dropout: float = 0.1
-    batch_size: int = 256
-    epochs: int = 10
+    batch_size: int = 512
+    epochs: int = 20
     lr: float = 1e-3
     n_negatives: int = 4
     seed: int = 42

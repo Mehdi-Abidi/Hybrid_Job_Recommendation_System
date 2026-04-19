@@ -46,16 +46,16 @@ models:
       cold:     {content: 0.7, collab: 0.0, popularity: 0.3}
   two_tower:
     embedding_dim: 128
-    hidden_dims: [256, 128]
+    hidden_dims: [512, 256]
     dropout: 0.2
-    batch_size: 512
-    epochs: 10
+    batch_size: 1024
+    epochs: 25
     lr: 0.001
     negatives_per_positive: 4
   ltr:
     objective: rank:ndcg
-    n_estimators: 200
-    learning_rate: 0.1
+    n_estimators: 500
+    learning_rate: 0.05
     max_depth: 6
   llm:
     model: gpt-4o-mini

@@ -104,7 +104,14 @@ def fit_tier2(cfg: Settings, data: ProcessedData) -> dict[str, Any]:
 
 def fit_tier3(cfg: Settings, data: ProcessedData) -> dict[str, Any]:
     ontology = SkillOntology()
-    salary = SalaryPredictor().fit(data.jobs)
+    # Augment salary training data with Train_rev1 (real UK salary labels) if present.
+    salary_jobs = data.jobs
+    train_rev1_path = cfg.path("raw") / "Train_rev1.csv"
+    if train_rev1_path.exists():
+        from src.data.real_data_adapter import adapt_train_rev1
+        aux = adapt_train_rev1(train_rev1_path, ontology)
+        salary_jobs = pd.concat([data.jobs, aux], ignore_index=True)
+    salary = SalaryPredictor().fit(salary_jobs)
     career = CareerPathPredictor().fit(data.train, data.jobs)
     return {"ontology": ontology, "salary": salary, "career": career}
 

@@ -23,13 +23,13 @@ MASK_ID = 1  # reserved; real items start at index 2
 @dataclass
 class BERT4RecConfig:
     max_len: int = 50
-    hidden_dim: int = 64
-    n_heads: int = 2
+    hidden_dim: int = 128
+    n_heads: int = 4
     n_layers: int = 2
     dropout: float = 0.1
     mask_prob: float = 0.15
-    batch_size: int = 64
-    epochs: int = 10
+    batch_size: int = 128
+    epochs: int = 20
     lr: float = 1e-3
     seed: int = 42
 

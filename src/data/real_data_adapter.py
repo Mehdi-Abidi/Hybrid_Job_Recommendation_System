@@ -243,6 +243,34 @@ def synthesize_interactions(users: pd.DataFrame, jobs: pd.DataFrame,
     return df
 
 
+def adapt_train_rev1(path: Path, ontology: SkillOntology) -> pd.DataFrame:
+    """Kaggle Train_rev1.csv -> jobs-schema DataFrame with real UK salary labels.
+    Used as auxiliary training data for the salary predictor."""
+    df = pd.read_csv(path, low_memory=False)
+    log.info("Adapting %d Train_rev1 rows for salary training", len(df))
+
+    out = pd.DataFrame()
+    out["job_id"] = -(df["Id"].astype("int64") + 1)  # negative IDs avoid collisions with LinkedIn jobs
+    out["title"] = df["Title"].fillna("").astype(str).str.strip()
+    out["description"] = df["FullDescription"].fillna(out["title"]).astype(str).apply(_strip_html)
+    out["location"] = df["LocationNormalized"].fillna(df["LocationRaw"]).fillna("UK").astype(str)
+    out["category"] = out["title"].apply(lambda t: _infer_category_from_title(t, ontology))
+    out["seniority"] = [_infer_seniority_from_title(t, "") for t in out["title"]]
+
+    corpus = out["title"] + " " + out["description"]
+    out["skills"] = corpus.apply(lambda x: ",".join(_extract_skills(x, ontology)))
+
+    # SalaryNormalized is GBP annual; convert to USD (approx) and split into min/max.
+    gbp = pd.to_numeric(df["SalaryNormalized"], errors="coerce")
+    usd = gbp * 1.27
+    out["salary_min"] = (usd * 0.9).fillna(0).clip(lower=20000, upper=400000).astype(int)
+    out["salary_max"] = (usd * 1.1).fillna(0).clip(lower=20000, upper=500000).astype(int)
+    out["posted_days_ago"] = 30
+    out = out[out["salary_min"] > 0].reset_index(drop=True)
+    return out[["job_id", "title", "category", "seniority", "location",
+                "skills", "description", "salary_min", "salary_max", "posted_days_ago"]]
+
+
 def build_real_dataset(raw_dir: Path, out_dir: Path, ontology: SkillOntology | None = None,
                        max_jobs: int | None = None, seed: int = 42) -> dict[str, Path]:
     """Full pipeline: real CSVs -> canonical triple written to `out_dir`."""
