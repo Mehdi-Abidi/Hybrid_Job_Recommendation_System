@@ -13,6 +13,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from src.features.structured_features import SkillEncoder, CategoricalEncoder, bin_experience
 from src.features.text_features import EmbeddingFeaturizer, job_text, user_text
+from src.utils.device import best_device
 from src.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -148,21 +149,24 @@ class TwoTowerTrainer:
         ds = _PairDataset(self.artifacts.user_feature_matrix, self.artifacts.job_feature_matrix, u_idx, j_idx)
         loader = DataLoader(ds, batch_size=min(batch_size, len(ds)), shuffle=True, drop_last=False)
 
+        device = best_device()
         model = TwoTowerModel(
             user_in_dim=self.artifacts.config["user_in_dim"],
             job_in_dim=self.artifacts.config["job_in_dim"],
             hidden_dims=hidden_dims, emb_dim=emb_dim, dropout=dropout,
-        )
+        ).to(device)
         opt = torch.optim.Adam(model.parameters(), lr=lr)
+        log.info("TwoTower training on %s", device)
 
         model.train()
         for ep in range(epochs):
             total = 0.0
             for u_feat, j_feat in loader:
+                u_feat = u_feat.to(device); j_feat = j_feat.to(device)
                 u = model.user_embedding(u_feat)
                 j = model.job_embedding(j_feat)
                 logits = u @ j.T  # (B, B); positives on the diagonal
-                labels = torch.arange(u.size(0))
+                labels = torch.arange(u.size(0), device=device)
                 loss = F.cross_entropy(logits, labels)
                 opt.zero_grad()
                 loss.backward()
@@ -178,14 +182,16 @@ class TwoTowerTrainer:
     def job_embeddings(self) -> np.ndarray:
         assert self.model is not None and self.artifacts is not None
         self.model.eval()
-        j = torch.from_numpy(self.artifacts.job_feature_matrix).float()
+        device = next(self.model.parameters()).device
+        j = torch.from_numpy(self.artifacts.job_feature_matrix).float().to(device)
         return self.model.job_embedding(j).cpu().numpy().astype(np.float32)
 
     @torch.no_grad()
     def user_embeddings(self) -> np.ndarray:
         assert self.model is not None and self.artifacts is not None
         self.model.eval()
-        u = torch.from_numpy(self.artifacts.user_feature_matrix).float()
+        device = next(self.model.parameters()).device
+        u = torch.from_numpy(self.artifacts.user_feature_matrix).float().to(device)
         return self.model.user_embedding(u).cpu().numpy().astype(np.float32)
 
     def save(self, path: Path) -> None:
@@ -211,10 +217,11 @@ class TwoTowerTrainer:
             user_feature_matrix=user_feat, job_feature_matrix=job_feat,
             user_ids=obj["user_ids"], job_ids=obj["job_ids"], config=obj["config"],
         )
+        device = best_device()
         self.model = TwoTowerModel(
             user_in_dim=obj["config"]["user_in_dim"], job_in_dim=obj["config"]["job_in_dim"],
             hidden_dims=self.cfg.get("hidden_dims", [256, 128]),
             emb_dim=self.cfg.get("embedding_dim", 128), dropout=self.cfg.get("dropout", 0.2),
-        )
-        self.model.load_state_dict(torch.load(path / "two_tower.pt"))
+        ).to(device)
+        self.model.load_state_dict(torch.load(path / "two_tower.pt", map_location=device))
         return self

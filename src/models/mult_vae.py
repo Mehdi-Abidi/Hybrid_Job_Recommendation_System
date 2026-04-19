@@ -78,9 +78,12 @@ class MultVAERecommender:
                 X[u, j] = float(r["rating"])
         self._user_inputs = X
 
-        self.model = MultVAE(n_items, self.cfg)
+        from src.utils.device import best_device
+        device = best_device()
+        self.model = MultVAE(n_items, self.cfg).to(device)
         opt = torch.optim.Adam(self.model.parameters(), lr=self.cfg.lr)
-        X_t = torch.from_numpy(X)
+        X_t = torch.from_numpy(X).to(device)
+        log.info("MultVAE training on %s", device)
 
         step = 0
         self.model.train()
@@ -110,7 +113,8 @@ class MultVAERecommender:
         if u is None or self.model is None or self._user_inputs is None:
             return []
         self.model.eval()
-        x = torch.from_numpy(self._user_inputs[u:u + 1])
+        device = next(self.model.parameters()).device
+        x = torch.from_numpy(self._user_inputs[u:u + 1]).to(device)
         logits, _, _ = self.model(x)
         scores = logits[0].cpu().numpy()
         if exclude_seen:
@@ -127,7 +131,8 @@ class MultVAERecommender:
         if u is None or self.model is None:
             return np.zeros(len(job_ids), dtype=np.float32)
         self.model.eval()
-        x = torch.from_numpy(self._user_inputs[u:u + 1])
+        device = next(self.model.parameters()).device
+        x = torch.from_numpy(self._user_inputs[u:u + 1]).to(device)
         logits, _, _ = self.model(x)
         scores = logits[0].cpu().numpy()
         return np.array([scores[self._job_idx[int(j)]] if int(j) in self._job_idx else 0.0

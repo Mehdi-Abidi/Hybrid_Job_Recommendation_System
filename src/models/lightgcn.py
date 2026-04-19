@@ -99,9 +99,12 @@ class LightGCNRecommender:
         for u, j in zip(rows, cols):
             self._user_pos[int(u)].add(int(j))
 
-        adj = _build_norm_adj(mat, n_users, n_jobs)
-        self.model = LightGCN(n_users, n_jobs, self.cfg, adj)
+        from src.utils.device import best_device
+        device = best_device()
+        adj = _build_norm_adj(mat, n_users, n_jobs).to(device)
+        self.model = LightGCN(n_users, n_jobs, self.cfg, adj).to(device)
         opt = torch.optim.Adam(self.model.parameters(), lr=self.cfg.lr)
+        log.info("LightGCN training on %s", device)
 
         # BPR training with uniform random negatives.
         user_pool = rows
@@ -113,15 +116,15 @@ class LightGCNRecommender:
             total, n = 0.0, 0
             for start in range(0, len(perm), self.cfg.batch_size):
                 batch = perm[start:start + self.cfg.batch_size]
-                ub = torch.tensor(user_pool[batch], dtype=torch.long)
-                pb = torch.tensor(pos_pool[batch], dtype=torch.long)
+                ub = torch.tensor(user_pool[batch], dtype=torch.long, device=device)
+                pb = torch.tensor(pos_pool[batch], dtype=torch.long, device=device)
                 neg = np.empty_like(batch)
                 for i, u in enumerate(user_pool[batch]):
                     while True:
                         jn = int(rng.integers(0, n_jobs))
                         if jn not in self._user_pos[int(u)]:
                             neg[i] = jn; break
-                nb = torch.tensor(neg, dtype=torch.long)
+                nb = torch.tensor(neg, dtype=torch.long, device=device)
                 loss = self.model.bpr_loss(ub, pb, nb)
                 opt.zero_grad(); loss.backward(); opt.step()
                 total += float(loss.item()) * len(batch); n += len(batch)

@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
+from src.utils.device import best_device
 from src.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -125,15 +126,18 @@ class BERT4RecTrainer:
             return self
 
         n_items = len(self._item_to_token)
-        self.model = BERT4Rec(n_items=n_items, cfg=self.cfg)
+        device = best_device()
+        self.model = BERT4Rec(n_items=n_items, cfg=self.cfg).to(device)
         ds = _MaskedSeqDataset(seqs, self.cfg, rng)
         loader = DataLoader(ds, batch_size=min(self.cfg.batch_size, len(ds)), shuffle=True)
         opt = torch.optim.Adam(self.model.parameters(), lr=self.cfg.lr)
+        log.info("BERT4Rec training on %s", device)
 
         self.model.train()
         for ep in range(self.cfg.epochs):
             total, n = 0.0, 0
             for seq, lbl in loader:
+                seq = seq.to(device); lbl = lbl.to(device)
                 logits = self.model(seq)  # (B, L, V)
                 loss = F.cross_entropy(logits.view(-1, logits.size(-1)), lbl.view(-1), ignore_index=PAD_ID)
                 opt.zero_grad(); loss.backward(); opt.step()
@@ -147,12 +151,13 @@ class BERT4RecTrainer:
         if self.model is None:
             return []
         self.model.eval()
+        device = next(self.model.parameters()).device
         tokens = [self._item_to_token[int(j)] for j in history if int(j) in self._item_to_token]
         tokens = tokens[-(self.cfg.max_len - 1):] + [MASK_ID]
         seq = [PAD_ID] * (self.cfg.max_len - len(tokens)) + tokens
-        x = torch.tensor([seq], dtype=torch.long)
+        x = torch.tensor([seq], dtype=torch.long, device=device)
         logits = self.model(x)[0, -1]  # predict the masked final position
-        scores = logits[2:].numpy()    # skip pad/mask tokens
+        scores = logits[2:].cpu().numpy()    # skip pad/mask tokens
         # Map token back to item id.
         item_ids = np.array([self._token_to_item[i + 2] for i in range(len(scores))])
         seen = set(int(j) for j in history) if exclude_seen else set()
@@ -177,6 +182,7 @@ class BERT4RecTrainer:
         self._item_to_token = obj["item_to_token"]
         self._token_to_item = {v: k for k, v in self._item_to_token.items()}
         self.cfg = obj["cfg"]
-        self.model = BERT4Rec(n_items=len(self._item_to_token), cfg=self.cfg)
-        self.model.load_state_dict(torch.load(path / "bert4rec.pt"))
+        device = best_device()
+        self.model = BERT4Rec(n_items=len(self._item_to_token), cfg=self.cfg).to(device)
+        self.model.load_state_dict(torch.load(path / "bert4rec.pt", map_location=device))
         return self

@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.features.structured_features import parse_skills
+from src.utils.device import best_device
 from src.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -153,13 +154,16 @@ class DeepFMRecommender:
         ds = TensorDataset(X, y)
         loader = DataLoader(ds, batch_size=min(self.cfg.batch_size, len(ds)), shuffle=True)
 
-        self.model = DeepFM(self._field_dims, self.cfg.emb_dim, self.cfg.mlp_dims, self.cfg.dropout)
+        device = best_device()
+        self.model = DeepFM(self._field_dims, self.cfg.emb_dim, self.cfg.mlp_dims, self.cfg.dropout).to(device)
         opt = torch.optim.Adam(self.model.parameters(), lr=self.cfg.lr)
+        log.info("DeepFM training on %s", device)
 
         self.model.train()
         for ep in range(self.cfg.epochs):
             total, n = 0.0, 0
             for xb, yb in loader:
+                xb = xb.to(device); yb = yb.to(device)
                 logit = self.model(xb)
                 loss = F.binary_cross_entropy_with_logits(logit, yb)
                 opt.zero_grad(); loss.backward(); opt.step()
@@ -176,7 +180,8 @@ class DeepFMRecommender:
         rows = np.array([self._encode_pair(u, self._job_idx[int(j)]) for j in job_ids if int(j) in self._job_idx])
         if len(rows) == 0:
             return np.zeros(len(job_ids), dtype=np.float32)
-        logits = self.model(torch.tensor(rows, dtype=torch.long)).numpy()
+        device = next(self.model.parameters()).device
+        logits = self.model(torch.tensor(rows, dtype=torch.long, device=device)).cpu().numpy()
         return 1.0 / (1.0 + np.exp(-logits))
 
     def recommend(self, user_id: int, k: int = 10, exclude: set[int] | None = None) -> list[tuple[int, float]]:
