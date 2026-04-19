@@ -1,0 +1,73 @@
+data:
+  raw_path: data/raw
+  processed_path: data/processed
+  jobs_file: jobs.csv
+  users_file: users.csv
+  interactions_file: interactions.csv
+  kaggle_dataset: airiddha/trainrev1
+  use_synthetic: false
+  synthetic:
+    n_users: 1000
+    n_jobs: 5000
+    n_interactions: 20000
+    seed: 42
+
+ratings:
+  view: 1
+  save: 3
+  apply: 5
+
+split:
+  test_size: 0.2
+  strategy: per_user  # per_user | time_based
+  seed: 42
+
+models:
+  content_based:
+    tfidf_max_features: 5000
+    embedding_model: all-MiniLM-L6-v2
+    embedding_dim: 384
+  collaborative:
+    n_factors: 100
+    n_epochs: 20
+    lr: 0.005
+    reg: 0.02
+  popularity:
+    recency_halflife_days: 30
+  hybrid:
+    warm_threshold: 5
+    lukewarm_threshold: 1
+    weights:
+      warm:     {content: 0.4, collab: 0.6, popularity: 0.0}
+      lukewarm: {content: 0.8, collab: 0.2, popularity: 0.0}
+      cold:     {content: 0.7, collab: 0.0, popularity: 0.3}
+  two_tower:
+    embedding_dim: 128
+    hidden_dims: [256, 128]
+    dropout: 0.2
+    batch_size: 512
+    epochs: 10
+    lr: 0.001
+    negatives_per_positive: 4
+  ltr:
+    objective: rank:ndcg
+    n_estimators: 200
+    learning_rate: 0.1
+    max_depth: 6
+  llm:
+    model: gpt-4o-mini
+    rerank_top_k: 20
+    output_top_n: 10
+    max_tokens: 4096
+
+faiss:
+  index_type: IVFFlat
+  nlist: 100
+  nprobe: 10
+
+evaluation:
+  k_values: [5, 10, 20]
+  metrics: [precision, recall, ndcg, map, coverage, diversity]
+
+paths:
+  artifacts: models_artifacts

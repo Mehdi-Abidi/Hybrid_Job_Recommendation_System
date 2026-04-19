@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Env
+.venv/
+venv/
+.env
+
+# Data + artifacts
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+models_artifacts/*
+!models_artifacts/.gitkeep
+
+# Notebooks
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude / agent metadata
+.claude/
+
+# Large raw archives (not tracked)
+*.zip
+postings.csv.zip
