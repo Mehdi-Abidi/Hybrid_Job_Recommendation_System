@@ -22,7 +22,7 @@ ratings:
 
 split:
   test_size: 0.2
-  strategy: per_user  # per_user | time_based
+  strategy: time_based  # global temporal cutoff prevents 20-50% leakage bias (Ji et al. TOIS 2023)
   seed: 42
 
 models:
