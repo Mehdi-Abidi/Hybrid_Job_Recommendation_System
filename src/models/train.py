@@ -168,14 +168,40 @@ def save_artifacts(cfg: Settings, *, data: ProcessedData,
     log.info("Artifacts saved to %s", root)
 
 
-def evaluate_all(cfg: Settings, data: ProcessedData, content, collab, popularity, hybrid) -> pd.DataFrame:
-    ev = Evaluator(data.test, k_values=cfg.evaluation["k_values"], jobs=data.jobs, positive_rating_threshold=3)
-    models = {
-        "content": lambda u, k: content.recommend(u, k) if u in content._user_index else [],
-        "collab": lambda u, k: collab.recommend(u, k),
-        "popularity": lambda u, k: popularity.recommend(k=k),
-        "hybrid": lambda u, k: [(j, s) for j, s in hybrid.recommend(u, k=k)],
-    }
+def evaluate_all(cfg: Settings, data: ProcessedData, content, collab, popularity, hybrid,
+                 *, two_tower=None, faiss_idx=None, ltr=None, bilateral=None,
+                 debug_per_model: bool = True) -> pd.DataFrame:
+    """Evaluate the production cascade (FAISS → bilateral → LTR → MMR) — the only
+    metric that actually reflects what we ship. Per-model rows kept for debugging
+    so we can see individual stage contributions.
+
+    With binary implicit feedback, every test interaction is a positive
+    (positive_rating_threshold=1)."""
+    from src.pipeline.multi_stage import MultiStagePipeline, PipelineStages
+    user_history_set = data.train.groupby("user_id")["job_id"].apply(
+        lambda s: {int(j) for j in s}).to_dict()
+    ev = Evaluator(data.test, k_values=cfg.evaluation["k_values"], jobs=data.jobs,
+                   positive_rating_threshold=1)
+    models: dict[str, Any] = {}
+    # Production cascade — only available once the full stack is fit.
+    if two_tower is not None and faiss_idx is not None and ltr is not None:
+        pipe = MultiStagePipeline(
+            PipelineStages(two_tower=two_tower, faiss=faiss_idx, content=content,
+                           collab=collab, popularity=popularity, ltr=ltr, llm=None,
+                           bilateral=bilateral),
+            users=data.users, jobs=data.jobs, user_history=user_history_set,
+            n_retrieve=500, n_rank=20, n_final=10,
+        )
+        models["production"] = lambda u, k: [
+            (r.job_id, r.score) for r in pipe.recommend(u, exclude_seen=True)
+        ]
+    if debug_per_model:
+        models.update({
+            "content": lambda u, k: content.recommend(u, k) if u in content._user_index else [],
+            "collab": lambda u, k: collab.recommend(u, k),
+            "popularity": lambda u, k: popularity.recommend(k=k),
+            "hybrid": lambda u, k: [(j, s) for j, s in hybrid.recommend(u, k=k)],
+        })
     return ev.compare_models(models)
 
 
@@ -212,7 +238,9 @@ def run(cfg: Settings, include_tier2: bool = False) -> dict[str, Any]:
         save_artifacts(cfg, data=data, content=content, collab=collab, popularity=popularity,
                        hybrid=hybrid, two_tower=two_tower, faiss_idx=faiss_idx, ltr=ltr,
                        bilateral=bilateral, tier2=tier2, tier3=tier3)
-        report = evaluate_all(cfg, data, content, collab, popularity, hybrid)
+        report = evaluate_all(cfg, data, content, collab, popularity, hybrid,
+                              two_tower=two_tower, faiss_idx=faiss_idx, ltr=ltr,
+                              bilateral=bilateral)
         log.info("Evaluation:\n%s", report.to_string(index=False))
         # Per-model headline metrics into MLflow
         for _, row in report.iterrows():

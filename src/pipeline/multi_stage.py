@@ -47,7 +47,8 @@ class Recommendation:
 class MultiStagePipeline:
     def __init__(self, stages: PipelineStages, users: pd.DataFrame, jobs: pd.DataFrame,
                  user_history: dict[int, set[int]] | None = None,
-                 n_retrieve: int = 500, n_rank: int = 20, n_final: int = 10):
+                 n_retrieve: int = 500, n_rank: int = 20, n_final: int = 10,
+                 mmr_lambda: float = 0.7, max_posted_days: int = 90):
         self.s = stages
         self.users = users
         self.jobs = jobs
@@ -55,15 +56,32 @@ class MultiStagePipeline:
         self.n_retrieve = n_retrieve
         self.n_rank = n_rank
         self.n_final = n_final
+        self.mmr_lambda = mmr_lambda
+        # Active-job filter: drop postings older than max_posted_days. None = disabled.
+        if "posted_days_ago" in jobs.columns and max_posted_days is not None:
+            self._active_jobs = set(int(j) for j in jobs.loc[
+                jobs["posted_days_ago"] <= max_posted_days, "job_id"
+            ])
+        else:
+            self._active_jobs = None
+        # Pre-compute job embedding lookup for MMR diversity (uses two-tower if wired).
+        if stages.two_tower is not None:
+            art = stages.two_tower.artifacts
+            self._j_row = {int(j): i for i, j in enumerate(art.job_ids)}
+            self._j_emb = stages.two_tower.job_embeddings()
+        else:
+            self._j_row = {}
+            self._j_emb = None
 
     # Stage 1: retrieve candidates via two-tower+FAISS, optionally merged with classical sources.
     def _retrieve(self, user_id: int) -> list[tuple[int, float]]:
         cands: dict[int, float] = {}
         if self.s.two_tower is not None and self.s.faiss is not None:
             art = self.s.two_tower.artifacts
-            u_pos = np.where(art.user_ids == user_id)[0]
-            if len(u_pos) > 0:
-                ue = self.s.two_tower.user_embeddings()[u_pos[0]]
+            u_id_to_row = {int(u): i for i, u in enumerate(art.user_ids)}
+            u_idx = u_id_to_row.get(int(user_id), -1)
+            if u_idx >= 0:
+                ue = self.s.two_tower.user_embeddings()[u_idx]
                 for jid, score in self.s.faiss.search(ue, k=self.n_retrieve):
                     cands[jid] = max(cands.get(jid, -np.inf), score)
         # Fallback/merge: classical signals ensure coverage.
@@ -142,13 +160,50 @@ class MultiStagePipeline:
             recs.append(Recommendation(job_id=jid, score=float(score), explanation=reason, stage_scores=ss))
         return recs
 
+    # MMR diversity rerank: trade off relevance (LTR score) against similarity to
+    # already-selected items, computed in two-tower job-embedding space. Standard
+    # post-LTR step in production rec systems (YouTube CIKM 2018 used DPP — MMR
+    # is the simpler well-understood predecessor with proven engagement lift).
+    def _diversify_mmr(self, ranked: list[tuple[int, float]]) -> list[tuple[int, float]]:
+        if self._j_emb is None or len(ranked) <= self.n_final:
+            return ranked[: self.n_final]
+        selected: list[tuple[int, float]] = []
+        pool = list(ranked)
+        sel_emb_rows: list[int] = []
+        while pool and len(selected) < self.n_final:
+            if not selected:
+                # Pick the highest-scoring candidate to seed.
+                best_idx = max(range(len(pool)), key=lambda i: pool[i][1])
+            else:
+                sel_emb = self._j_emb[sel_emb_rows]
+                best_idx, best_mmr = 0, -np.inf
+                for i, (jid, s) in enumerate(pool):
+                    row = self._j_row.get(int(jid))
+                    if row is None:
+                        mmr_score = s  # unknown emb — score stands alone
+                    else:
+                        sim = float(np.max(sel_emb @ self._j_emb[row]))
+                        mmr_score = self.mmr_lambda * s - (1 - self.mmr_lambda) * sim
+                    if mmr_score > best_mmr:
+                        best_mmr, best_idx = mmr_score, i
+            picked = pool.pop(best_idx)
+            selected.append(picked)
+            row = self._j_row.get(int(picked[0]))
+            if row is not None:
+                sel_emb_rows.append(row)
+        return selected
+
     def recommend(self, user_id: int, exclude_seen: bool = True) -> list[Recommendation]:
         retrieved = self._retrieve(int(user_id))
+        # Business rules: drop applied/seen jobs and expired postings BEFORE ranking.
         if exclude_seen:
             seen = self.user_history.get(int(user_id), set())
             retrieved = [(j, s) for j, s in retrieved if j not in seen]
+        if self._active_jobs is not None:
+            retrieved = [(j, s) for j, s in retrieved if int(j) in self._active_jobs]
         ranked = self._rank(int(user_id), retrieved)
-        recs = self._rerank(int(user_id), ranked)
+        diversified = self._diversify_mmr(ranked)
+        recs = self._rerank(int(user_id), diversified)
         # Ensure retrieval and LTR scores are visible even if LLM added explanation.
         retrieve_map = dict(retrieved)
         for r in recs:
