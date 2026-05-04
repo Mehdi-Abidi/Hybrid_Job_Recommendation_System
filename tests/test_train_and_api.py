@@ -54,7 +54,7 @@ def test_train_pipeline_end_to_end(tmp_project, monkeypatch):
     # Artifacts were saved.
     root = tmp_project.path("artifacts")
     assert (root / "content_based" / "job_embeddings.npy").exists()
-    assert (root / "collaborative" / "svd.npz").exists()
+    assert (root / "collaborative" / "ials.npz").exists()
     assert (root / "popularity" / "popularity.json").exists()
     assert (root / "two_tower" / "two_tower.pt").exists()
     assert (root / "faiss" / "jobs.faiss").exists()

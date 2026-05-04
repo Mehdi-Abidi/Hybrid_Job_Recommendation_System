@@ -124,15 +124,15 @@ def test_inverse_tower_save_load_roundtrip(tmp_path, trained_forward, processed)
     assert np.allclose(e1, e2, atol=1e-5)
 
 
-# RankingSignals with reciprocal fields produces 14-dim feature rows; without them, 14-dim
-# but trailing 3 columns are zero — verifies the LTR feature builder integration.
+# RankingSignals with reciprocal+hybrid+bert4rec fields produces 16-dim rows;
+# without them, the trailing 5 columns (s_uj, s_ju, bilateral, hybrid, bert4rec) are 0.
 def test_ranking_features_with_and_without_bilateral(trained_forward, processed):
     from src.features.ranking_features import RankingSignals, build_ranking_features, FEATURE_NAMES
     user_id = int(processed.users["user_id"].iloc[0])
     cand = processed.jobs["job_id"].astype(int).tolist()
     n = len(cand)
 
-    # Without bilateral: trailing 3 columns must be 0.
+    # Without optional signals: trailing 5 columns must be 0.
     sigs = RankingSignals(
         two_tower=np.full(n, 0.5, dtype=np.float32),
         content=np.full(n, 0.4, dtype=np.float32),
@@ -141,9 +141,10 @@ def test_ranking_features_with_and_without_bilateral(trained_forward, processed)
     )
     feats = build_ranking_features(user_id, cand, processed.users, processed.jobs, sigs)
     assert feats.shape == (n, len(FEATURE_NAMES))
-    assert (feats[:, -3:] == 0).all()
+    assert (feats[:, -5:] == 0).all()
 
-    # With bilateral: trailing 3 columns are the supplied values.
+    # With bilateral: columns at positions s_uj=-5, s_ju=-4, bilateral=-3 carry the values.
+    # hybrid (-2) and bert4rec (-1) remain 0 since not supplied.
     s_uj = np.linspace(-0.5, 0.5, n).astype(np.float32)
     s_ju = np.linspace(0.1, 0.6, n).astype(np.float32)
     bilat = (1 / (1 + np.exp(-s_uj))) * (1 / (1 + np.exp(-s_ju)))
@@ -152,6 +153,7 @@ def test_ranking_features_with_and_without_bilateral(trained_forward, processed)
         s_user_to_job=s_uj, s_job_to_user=s_ju, bilateral=bilat.astype(np.float32),
     )
     feats2 = build_ranking_features(user_id, cand, processed.users, processed.jobs, sigs2)
-    assert np.allclose(feats2[:, -3], s_uj, atol=1e-5)
-    assert np.allclose(feats2[:, -2], s_ju, atol=1e-5)
-    assert np.allclose(feats2[:, -1], bilat, atol=1e-5)
+    assert np.allclose(feats2[:, -5], s_uj, atol=1e-5)
+    assert np.allclose(feats2[:, -4], s_ju, atol=1e-5)
+    assert np.allclose(feats2[:, -3], bilat, atol=1e-5)
+    assert (feats2[:, -2:] == 0).all()

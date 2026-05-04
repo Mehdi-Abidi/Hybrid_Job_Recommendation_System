@@ -42,14 +42,22 @@ class SignalProvider:
         self.bert4rec = bert4rec        # BERT4RecTrainer or None — sequence-model score
         self.salary = salary            # SalaryPredictor or None — soft salary alignment feature
         self.user_history = user_history or {}   # {user_id: [job_id, ...]} for BERT4Rec
-        # Pre-compute id→row dicts for two-tower id lookups; replaces per-call np.where scans.
+        # Pre-compute id→row dicts AND the full (n_users, d) and (n_jobs, d)
+        # embedding matrices once. Previously every call to _two_tower_scores
+        # ran a full corpus forward pass through the tower — for a 24k-pair LTR
+        # fit over 2,484 users that's 2,484 redundant full forwards. Caching
+        # collapses this to two forward passes total.
         if two_tower is not None:
             art = two_tower.artifacts
             self._u_id_to_row = {int(u): i for i, u in enumerate(art.user_ids)}
             self._j_id_to_row = {int(j): i for i, j in enumerate(art.job_ids)}
+            self._tt_user_emb = two_tower.user_embeddings()
+            self._tt_job_emb = two_tower.job_embeddings()
         else:
             self._u_id_to_row = {}
             self._j_id_to_row = {}
+            self._tt_user_emb = None
+            self._tt_job_emb = None
 
     def compute(self, user_id: int, candidate_job_ids: list[int]) -> RankingSignals:
         n = len(candidate_job_ids)
@@ -95,17 +103,16 @@ class SignalProvider:
 
     def _two_tower_scores(self, user_id: int, candidate_job_ids: list[int]) -> np.ndarray:
         u_row = self._u_id_to_row.get(int(user_id), -1)
-        if u_row < 0:
+        if u_row < 0 or self._tt_user_emb is None:
             return np.zeros(len(candidate_job_ids), dtype=np.float32)
-        ue = self.two_tower.user_embeddings()[u_row]
-        je = self.two_tower.job_embeddings()
+        ue = self._tt_user_emb[u_row]
         j_idx = np.fromiter(
             (self._j_id_to_row.get(int(j), -1) for j in candidate_job_ids),
             dtype=np.int64, count=len(candidate_job_ids),
         )
         out = np.zeros(len(candidate_job_ids), dtype=np.float32)
         valid = j_idx >= 0
-        out[valid] = je[j_idx[valid]] @ ue
+        out[valid] = self._tt_job_emb[j_idx[valid]] @ ue
         return out
 
 

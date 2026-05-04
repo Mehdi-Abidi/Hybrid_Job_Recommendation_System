@@ -174,23 +174,29 @@ class BilateralScorer:
     def __init__(self, forward_tower, inverse_tower: JobToUserTower):
         # `forward_tower` is a TwoTowerTrainer (already trained); we access its .model
         # and feature matrices through .artifacts to score pairs without re-encoding.
+        # Both forward and inverse tower full embedding matrices are cached at
+        # construction — same motivation as SignalProvider's caching: bilateral
+        # scoring during LTR fit was running 4 full forwards per user × 2,484 users.
         self.fwd = forward_tower
         self.inv = inverse_tower
         art = forward_tower.artifacts
         self._u_row = {int(u): i for i, u in enumerate(art.user_ids)}
         self._j_row = {int(j): i for i, j in enumerate(art.job_ids)}
+        self._fwd_u = forward_tower.user_embeddings()
+        self._fwd_j = forward_tower.job_embeddings()
+        self._inv_u = inverse_tower.user_embeddings()
+        self._inv_j = inverse_tower.job_embeddings()
 
     def _forward_scores(self, user_id: int, job_ids: list[int]) -> np.ndarray:
         u_row = self._u_row.get(int(user_id), -1)
         if u_row < 0:
             return np.zeros(len(job_ids), dtype=np.float32)
-        ue = self.fwd.user_embeddings()[u_row]
-        je = self.fwd.job_embeddings()
+        ue = self._fwd_u[u_row]
         out = np.zeros(len(job_ids), dtype=np.float32)
         for i, jid in enumerate(job_ids):
             row = self._j_row.get(int(jid), -1)
             if row >= 0:
-                out[i] = float(je[row] @ ue)
+                out[i] = float(self._fwd_j[row] @ ue)
         return out
 
     # Returns (s_user_to_job, s_job_to_user, bilateral) all as np.ndarray of shape (n,).
@@ -199,8 +205,17 @@ class BilateralScorer:
     def score(self, user_id: int, job_ids: list[int]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         if not job_ids:
             empty = np.zeros(0, dtype=np.float32)
-            return empty, empty, empty
-        fwd = self._forward_scores(int(user_id), job_ids)
-        inv = self.inv.score_pairs(int(user_id), job_ids)
+            return empty, empty.copy(), empty.copy()
+        u_row = self._u_row.get(int(user_id), -1)
+        if u_row < 0:
+            z = np.zeros(len(job_ids), dtype=np.float32)
+            return z, z.copy(), z.copy()
+        j_idx = np.fromiter((self._j_row.get(int(j), -1) for j in job_ids),
+                            dtype=np.int64, count=len(job_ids))
+        valid = j_idx >= 0
+        fwd = np.zeros(len(job_ids), dtype=np.float32)
+        inv = np.zeros(len(job_ids), dtype=np.float32)
+        fwd[valid] = self._fwd_j[j_idx[valid]] @ self._fwd_u[u_row]
+        inv[valid] = self._inv_j[j_idx[valid]] @ self._inv_u[u_row]
         bilateral = (_sigmoid(fwd) * _sigmoid(inv)).astype(np.float32)
         return fwd, inv, bilateral
