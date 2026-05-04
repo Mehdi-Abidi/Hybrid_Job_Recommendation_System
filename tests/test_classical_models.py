@@ -50,7 +50,8 @@ def content_model(processed):
 def test_content_fit_shapes(content_model, processed):
     art = content_model.artifacts
     assert art.job_embeddings.shape == (len(processed.jobs), 32)
-    assert art.user_profiles.shape == (len(processed.users), 32)
+    # (n_users, 2*dim) — long-term ‖ short-term concat (Task 6)
+    assert art.user_profiles.shape == (len(processed.users), 64)
     assert np.allclose(np.linalg.norm(art.job_embeddings, axis=1), 1.0, atol=1e-4)
 
 

@@ -40,21 +40,33 @@ class ContentBasedRecommender:
         log.info("ContentBased fit: %d jobs, %d users, dim=%d", len(job_ids), len(user_ids), job_emb.shape[1])
         return self
 
-    # Rank jobs for a known user by cosine similarity.
+    # Score `job_emb_subset` (n, dim) against the user's combined profile.
+    # Profile = [long, short] each (dim,) — score is 0.5 * (cos_long + cos_short).
+    def _score_against_user(self, user_idx: int, job_emb_subset: np.ndarray) -> np.ndarray:
+        profile = self.artifacts.user_profiles[user_idx]
+        half = profile.shape[0] // 2
+        long, short = profile[:half], profile[half:]
+        return 0.5 * (job_emb_subset @ long + job_emb_subset @ short)
+
+    # Rank jobs for a known user by combined long+short cosine similarity.
     def recommend(self, user_id: int, k: int = 10, exclude: set[int] | None = None) -> list[tuple[int, float]]:
         assert self.artifacts is not None
         i = self._user_index[int(user_id)]
-        scores = self.artifacts.job_embeddings @ self.artifacts.user_profiles[i]
+        scores = self._score_against_user(i, self.artifacts.job_embeddings)
         return self._top_k(scores, k, exclude)
 
     # Cold-start: rank jobs by similarity to freshly-encoded resume+skills.
+    # Cold users have no history — short = long; the combined score reduces to cos.
     def recommend_for_new_user(self, resume: str, skills: str, k: int = 10) -> list[tuple[int, float]]:
         assert self.artifacts is not None
         vec = self.profile_builder.build_for_new_user(resume, skills)
-        scores = self.artifacts.job_embeddings @ vec
+        half = vec.shape[0] // 2
+        long, short = vec[:half], vec[half:]
+        scores = 0.5 * (self.artifacts.job_embeddings @ long
+                        + self.artifacts.job_embeddings @ short)
         return self._top_k(scores, k, None)
 
-    # Job-to-job similarity.
+    # Job-to-job similarity (uses raw job embeddings — no user profile involved).
     def similar_jobs(self, job_id: int, k: int = 10) -> list[tuple[int, float]]:
         assert self.artifacts is not None
         j = self._job_index[int(job_id)]
@@ -67,7 +79,7 @@ class ContentBasedRecommender:
         assert self.artifacts is not None
         i = self._user_index[int(user_id)]
         cols = np.array([self._job_index[int(j)] for j in job_ids])
-        return self.artifacts.job_embeddings[cols] @ self.artifacts.user_profiles[i]
+        return self._score_against_user(i, self.artifacts.job_embeddings[cols])
 
     def _top_k(self, scores: np.ndarray, k: int, exclude: set[int] | None) -> list[tuple[int, float]]:
         if exclude:

@@ -85,7 +85,11 @@ class HybridRecommender:
         w = self.cfg.weights["cold"]
         job_ids = self._jobs["job_id"].to_numpy()
         vec = self.content.profile_builder.build_for_new_user(resume, skills)
-        content_s = self.content.artifacts.job_embeddings @ vec
+        # Dual profile: split [long | short] and average the two cosines.
+        half = vec.shape[0] // 2
+        long, short = vec[:half], vec[half:]
+        je = self.content.artifacts.job_embeddings
+        content_s = 0.5 * (je @ long + je @ short)
         pop_s = self.popularity.score_pairs(list(job_ids))
         final = w["content"] * _minmax(content_s) + w["popularity"] * _minmax(pop_s)
         return self._top_k(job_ids, final, k, set())
@@ -114,7 +118,10 @@ class HybridRecommender:
             return np.zeros(len(job_ids), dtype=np.float32)
         vec = self.content.profile_builder.build_for_new_user(
             str(row.iloc[0]["resume_text"]), str(row.iloc[0]["skills"]))
-        return self.content.artifacts.job_embeddings @ vec
+        half = vec.shape[0] // 2
+        long, short = vec[:half], vec[half:]
+        je = self.content.artifacts.job_embeddings
+        return 0.5 * (je @ long + je @ short)
 
     def _top_k(self, job_ids: np.ndarray, scores: np.ndarray, k: int, exclude: set[int]) -> list[tuple[int, float]]:
         scores = scores.copy()
