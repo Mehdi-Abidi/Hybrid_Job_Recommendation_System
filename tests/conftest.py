@@ -7,6 +7,15 @@ import yaml
 import tempfile
 import shutil
 from config import load_settings
+from tests.fixtures.build_smoke import build as _build_smoke
+
+
+# Smoke fixture: 50 users / 1000 jobs / 500 interactions, deterministic.
+@pytest.fixture(scope="session")
+def smoke_data_dir(tmp_path_factory) -> Path:
+    d = tmp_path_factory.mktemp("smoke_raw")
+    _build_smoke(d)
+    return d
 
 
 # Small deterministic synthetic dataset for fast tests.
