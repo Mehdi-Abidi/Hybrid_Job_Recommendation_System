@@ -58,6 +58,20 @@ class EmbeddingFeaturizer:
             self._model = SentenceTransformer(self.model_name)
         return self._model
 
+    # Drop the loaded transformer + free GPU/CPU memory. After two-tower's last
+    # text-encode pass nothing else uses MiniLM, but it stays resident (~120 MB
+    # CPU, ~500 MB if GPU was warmed) for the rest of the run unless we drop it.
+    def release(self) -> None:
+        self._model = None
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
     def encode(self, texts: list[str], normalize: bool = True) -> np.ndarray:
         model = self._load_model()
         emb = model.encode(

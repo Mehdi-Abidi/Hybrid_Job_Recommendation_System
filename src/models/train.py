@@ -226,15 +226,35 @@ def run(cfg: Settings, include_tier2: bool = False) -> dict[str, Any]:
             model_name=cfg.models["content_based"]["embedding_model"],
             dim=cfg.models["content_based"]["embedding_dim"],
         )
+        import gc
+
+        def _free_between_phases():
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
         content, collab, popularity, hybrid = fit_classical(cfg, data, embedder)
+        _free_between_phases()
         two_tower, faiss_idx = fit_neural_retrieval(cfg, data, embedder)
+        # MiniLM has done its job (text encoding for content + two-tower) — drop it.
+        # Frees ~120MB CPU and any cached GPU activations before bilateral / tier2 fit.
+        embedder.release()
+        _free_between_phases()
         bilateral = fit_reciprocal(cfg, data, two_tower)
+        _free_between_phases()
         # Tier 2 (BERT4Rec) and tier 3 (salary) train first so LTR can consume them.
         tier2 = fit_tier2(cfg, data) if include_tier2 else None
+        _free_between_phases()
         tier3 = fit_tier3(cfg, data)
+        _free_between_phases()
         ltr = fit_ltr(cfg, data, content, collab, popularity, two_tower, bilateral,
                       hybrid=hybrid, bert4rec=(tier2 or {}).get("bert4rec"),
                       salary=(tier3 or {}).get("salary"))
+        _free_between_phases()
         save_artifacts(cfg, data=data, content=content, collab=collab, popularity=popularity,
                        hybrid=hybrid, two_tower=two_tower, faiss_idx=faiss_idx, ltr=ltr,
                        bilateral=bilateral, tier2=tier2, tier3=tier3)
