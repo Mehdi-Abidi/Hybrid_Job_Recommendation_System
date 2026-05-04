@@ -176,18 +176,19 @@ class BilateralScorer:
         # and feature matrices through .artifacts to score pairs without re-encoding.
         self.fwd = forward_tower
         self.inv = inverse_tower
+        art = forward_tower.artifacts
+        self._u_row = {int(u): i for i, u in enumerate(art.user_ids)}
+        self._j_row = {int(j): i for i, j in enumerate(art.job_ids)}
 
     def _forward_scores(self, user_id: int, job_ids: list[int]) -> np.ndarray:
-        art = self.fwd.artifacts
-        u_pos = np.where(art.user_ids == int(user_id))[0]
-        if len(u_pos) == 0:
+        u_row = self._u_row.get(int(user_id), -1)
+        if u_row < 0:
             return np.zeros(len(job_ids), dtype=np.float32)
-        ue = self.fwd.user_embeddings()[u_pos[0]]
+        ue = self.fwd.user_embeddings()[u_row]
         je = self.fwd.job_embeddings()
-        j_id_to_row = {int(j): i for i, j in enumerate(art.job_ids)}
         out = np.zeros(len(job_ids), dtype=np.float32)
         for i, jid in enumerate(job_ids):
-            row = j_id_to_row.get(int(jid), -1)
+            row = self._j_row.get(int(jid), -1)
             if row >= 0:
                 out[i] = float(je[row] @ ue)
         return out

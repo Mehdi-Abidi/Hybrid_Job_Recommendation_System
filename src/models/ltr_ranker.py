@@ -35,6 +35,14 @@ class SignalProvider:
         self.collab = collab            # CollaborativeRecommender or None
         self.popularity = popularity    # PopularityRecommender or None
         self.bilateral = bilateral      # BilateralScorer or None
+        # Pre-compute id→row dicts for two-tower id lookups; replaces per-call np.where scans.
+        if two_tower is not None:
+            art = two_tower.artifacts
+            self._u_id_to_row = {int(u): i for i, u in enumerate(art.user_ids)}
+            self._j_id_to_row = {int(j): i for i, j in enumerate(art.job_ids)}
+        else:
+            self._u_id_to_row = {}
+            self._j_id_to_row = {}
 
     def compute(self, user_id: int, candidate_job_ids: list[int]) -> RankingSignals:
         n = len(candidate_job_ids)
@@ -52,13 +60,15 @@ class SignalProvider:
                               s_user_to_job=s_uj, s_job_to_user=s_ju, bilateral=bilat)
 
     def _two_tower_scores(self, user_id: int, candidate_job_ids: list[int]) -> np.ndarray:
-        art = self.two_tower.artifacts
-        u_pos = np.where(art.user_ids == user_id)[0]
-        if len(u_pos) == 0:
+        u_row = self._u_id_to_row.get(int(user_id), -1)
+        if u_row < 0:
             return np.zeros(len(candidate_job_ids), dtype=np.float32)
-        ue = self.two_tower.user_embeddings()[u_pos[0]]
+        ue = self.two_tower.user_embeddings()[u_row]
         je = self.two_tower.job_embeddings()
-        j_idx = np.array([np.where(art.job_ids == j)[0][0] if j in art.job_ids else -1 for j in candidate_job_ids])
+        j_idx = np.fromiter(
+            (self._j_id_to_row.get(int(j), -1) for j in candidate_job_ids),
+            dtype=np.int64, count=len(candidate_job_ids),
+        )
         out = np.zeros(len(candidate_job_ids), dtype=np.float32)
         valid = j_idx >= 0
         out[valid] = je[j_idx[valid]] @ ue

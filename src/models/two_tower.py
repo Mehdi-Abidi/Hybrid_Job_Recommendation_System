@@ -144,8 +144,12 @@ class TwoTowerTrainer:
         dropout = cfg.get("dropout", 0.2)
 
         torch.manual_seed(self.seed)
-        u_idx = np.array([np.where(self.artifacts.user_ids == u)[0][0] for u in train_pairs["user_id"]])
-        j_idx = np.array([np.where(self.artifacts.job_ids == j)[0][0] for j in train_pairs["job_id"]])
+        u_id_to_row = {int(u): i for i, u in enumerate(self.artifacts.user_ids)}
+        j_id_to_row = {int(j): i for i, j in enumerate(self.artifacts.job_ids)}
+        u_idx = np.fromiter((u_id_to_row[int(u)] for u in train_pairs["user_id"]),
+                            dtype=np.int64, count=len(train_pairs))
+        j_idx = np.fromiter((j_id_to_row[int(j)] for j in train_pairs["job_id"]),
+                            dtype=np.int64, count=len(train_pairs))
         ds = _PairDataset(self.artifacts.user_feature_matrix, self.artifacts.job_feature_matrix, u_idx, j_idx)
         loader = DataLoader(ds, batch_size=min(batch_size, len(ds)), shuffle=True, drop_last=False)
 
