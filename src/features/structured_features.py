@@ -1,5 +1,6 @@
-"""Multi-hot skill encoding, categorical encoding, experience binning."""
+"""Multi-hot skill encoding, categorical encoding, experience binning, location hashing."""
 from __future__ import annotations
+import hashlib
 import numpy as np
 import pandas as pd
 
@@ -64,3 +65,30 @@ class CategoricalEncoder:
 def bin_experience(years: pd.Series) -> np.ndarray:
     bins = [-1, 1, 3, 6, 10, 100]  # junior: 0-1, mid: 2-3, senior: 4-6, staff: 7-10, principal: 11+
     return pd.cut(years, bins=bins, labels=False).astype(np.int64).to_numpy()
+
+
+class HashBucketEncoder:
+    """Hash a string to one of `n_buckets` integer ids. Stable across runs.
+
+    Standard treatment for high-cardinality long-tail categoricals (location with
+    10k+ unique values) — cheaper than a learned embedding table on rare values
+    and avoids the 7GB feature-matrix blowup from one-hot. Recipe from Embedding-
+    based Retrieval at Facebook (KDD 2020)."""
+
+    def __init__(self, n_buckets: int = 256):
+        self.n_buckets = n_buckets
+
+    def transform(self, values: list[str]) -> np.ndarray:
+        return np.array(
+            [int(hashlib.md5(str(v).encode()).hexdigest()[:8], 16) % self.n_buckets
+             for v in values],
+            dtype=np.int64,
+        )
+
+
+# Split "City, State, Country" into (city, state, country). Robust to missing parts.
+def parse_location(loc: str) -> tuple[str, str, str]:
+    parts = [p.strip() for p in str(loc).split(",")]
+    while len(parts) < 3:
+        parts.append("")
+    return parts[0], parts[1], parts[2]

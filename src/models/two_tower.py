@@ -11,7 +11,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
-from src.features.structured_features import SkillEncoder, CategoricalEncoder, bin_experience
+from src.features.structured_features import (
+    SkillEncoder, CategoricalEncoder, HashBucketEncoder, bin_experience, parse_location,
+)
 from src.features.text_features import EmbeddingFeaturizer, job_text, user_text
 from src.utils.device import best_device
 from src.utils.logging import get_logger
@@ -59,8 +61,10 @@ class TwoTowerModel(nn.Module):
 @dataclass
 class TwoTowerArtifacts:
     skill_enc: SkillEncoder
-    cat_enc: CategoricalEncoder            # job category
-    loc_enc: CategoricalEncoder            # location
+    cat_enc: CategoricalEncoder            # job category (small vocab — keep as one-hot)
+    loc_hash: HashBucketEncoder            # location → 256 hash buckets (replaces 10k+ one-hot)
+    state_enc: CategoricalEncoder          # parsed state, small vocab
+    country_enc: CategoricalEncoder        # parsed country, small vocab
     user_text_emb_dim: int
     job_text_emb_dim: int
     user_feature_matrix: np.ndarray        # (n_users, user_in_dim) float32
@@ -96,34 +100,54 @@ class TwoTowerTrainer:
         self.artifacts: TwoTowerArtifacts | None = None
 
     # Build structured+text feature matrices for all jobs and users.
+    # Location features: 256-bucket hash one-hot + state + country (parsed from
+    # "City, State, Country"). Cuts the 10k+ raw-location one-hot to ~256+small,
+    # avoids the ~7GB feature-matrix blowup, and gives geographic generalization
+    # (Facebook KDD 2020 hash-bucket recipe).
     def build_features(self, jobs: pd.DataFrame, users: pd.DataFrame) -> TwoTowerArtifacts:
+        N_LOC_BUCKETS = 256
         skill_enc = SkillEncoder().fit(list(jobs["skills"].astype(str)) + list(users["skills"].astype(str)))
-        cat_enc = CategoricalEncoder().fit(list(jobs["category"].astype(str))) if "category" in jobs.columns \
-            else CategoricalEncoder().fit([""])
-        loc_enc = CategoricalEncoder().fit(list(jobs["location"].astype(str)) + list(users["preferred_location"].astype(str))
-                                           if "preferred_location" in users.columns else list(jobs["location"].astype(str)))
+        cat_enc = (CategoricalEncoder().fit(list(jobs["category"].astype(str)))
+                   if "category" in jobs.columns else CategoricalEncoder().fit([""]))
+        loc_hash = HashBucketEncoder(N_LOC_BUCKETS)
+        all_locs = list(jobs["location"].astype(str))
+        if "preferred_location" in users.columns:
+            all_locs += list(users["preferred_location"].astype(str))
+        state_enc = CategoricalEncoder().fit([parse_location(l)[1] for l in all_locs])
+        country_enc = CategoricalEncoder().fit([parse_location(l)[2] for l in all_locs])
+
+        def _loc_features(loc_strings: list[str]) -> np.ndarray:
+            buckets = loc_hash.transform(loc_strings)
+            bucket_oh = np.eye(N_LOC_BUCKETS, dtype=np.float32)[buckets]
+            states = [parse_location(l)[1] for l in loc_strings]
+            countries = [parse_location(l)[2] for l in loc_strings]
+            state_oh = np.eye(state_enc.size, dtype=np.float32)[state_enc.transform(states)]
+            country_oh = np.eye(country_enc.size, dtype=np.float32)[country_enc.transform(countries)]
+            return np.hstack([bucket_oh, state_oh, country_oh]).astype(np.float32)
 
         job_skill = skill_enc.transform(list(jobs["skills"].astype(str)))
-        job_cat = cat_enc.transform(list(jobs["category"].astype(str))) if "category" in jobs.columns \
-            else np.zeros(len(jobs), dtype=np.int64)
-        job_loc = loc_enc.transform(list(jobs["location"].astype(str)))
+        job_cat = (cat_enc.transform(list(jobs["category"].astype(str)))
+                   if "category" in jobs.columns else np.zeros(len(jobs), dtype=np.int64))
         job_cat_1h = np.eye(cat_enc.size, dtype=np.float32)[job_cat]
-        job_loc_1h = np.eye(loc_enc.size, dtype=np.float32)[job_loc]
+        job_loc_feat = _loc_features(list(jobs["location"].astype(str)))
         job_text_emb = self.text_embedder.encode([job_text(r) for _, r in jobs.iterrows()], normalize=True)
-        job_feat = np.hstack([job_skill, job_cat_1h, job_loc_1h, job_text_emb]).astype(np.float32)
+        job_feat = np.hstack([job_skill, job_cat_1h, job_loc_feat, job_text_emb]).astype(np.float32)
 
         user_skill = skill_enc.transform(list(users["skills"].astype(str)))
         user_exp = bin_experience(users["experience_years"]).reshape(-1, 1).astype(np.float32)
         if "preferred_location" in users.columns:
-            user_loc = loc_enc.transform(list(users["preferred_location"].astype(str)))
-            user_loc_1h = np.eye(loc_enc.size, dtype=np.float32)[user_loc]
+            user_loc_feat = _loc_features(list(users["preferred_location"].astype(str)))
         else:
-            user_loc_1h = np.zeros((len(users), loc_enc.size), dtype=np.float32)
+            user_loc_feat = np.zeros(
+                (len(users), N_LOC_BUCKETS + state_enc.size + country_enc.size),
+                dtype=np.float32,
+            )
         user_text_emb = self.text_embedder.encode([user_text(r) for _, r in users.iterrows()], normalize=True)
-        user_feat = np.hstack([user_skill, user_exp, user_loc_1h, user_text_emb]).astype(np.float32)
+        user_feat = np.hstack([user_skill, user_exp, user_loc_feat, user_text_emb]).astype(np.float32)
 
         self.artifacts = TwoTowerArtifacts(
-            skill_enc=skill_enc, cat_enc=cat_enc, loc_enc=loc_enc,
+            skill_enc=skill_enc, cat_enc=cat_enc, loc_hash=loc_hash,
+            state_enc=state_enc, country_enc=country_enc,
             user_text_emb_dim=user_text_emb.shape[1], job_text_emb_dim=job_text_emb.shape[1],
             user_feature_matrix=user_feat, job_feature_matrix=job_feat,
             user_ids=users["user_id"].to_numpy(), job_ids=jobs["job_id"].to_numpy(),
@@ -204,7 +228,8 @@ class TwoTowerTrainer:
         torch.save(self.model.state_dict(), path / "two_tower.pt")
         joblib.dump({
             "skill_enc": self.artifacts.skill_enc, "cat_enc": self.artifacts.cat_enc,
-            "loc_enc": self.artifacts.loc_enc, "config": self.artifacts.config,
+            "loc_hash": self.artifacts.loc_hash, "state_enc": self.artifacts.state_enc,
+            "country_enc": self.artifacts.country_enc, "config": self.artifacts.config,
             "user_ids": self.artifacts.user_ids, "job_ids": self.artifacts.job_ids,
         }, path / "two_tower_artifacts.joblib")
         np.save(path / "two_tower_user_feat.npy", self.artifacts.user_feature_matrix)
@@ -216,7 +241,9 @@ class TwoTowerTrainer:
         user_feat = np.load(path / "two_tower_user_feat.npy")
         job_feat = np.load(path / "two_tower_job_feat.npy")
         self.artifacts = TwoTowerArtifacts(
-            skill_enc=obj["skill_enc"], cat_enc=obj["cat_enc"], loc_enc=obj["loc_enc"],
+            skill_enc=obj["skill_enc"], cat_enc=obj["cat_enc"],
+            loc_hash=obj["loc_hash"], state_enc=obj["state_enc"],
+            country_enc=obj["country_enc"],
             user_text_emb_dim=0, job_text_emb_dim=0,
             user_feature_matrix=user_feat, job_feature_matrix=job_feat,
             user_ids=obj["user_ids"], job_ids=obj["job_ids"], config=obj["config"],
