@@ -40,6 +40,7 @@ from src.models.salary_predictor import SalaryPredictor
 from src.models.career_path import CareerPathPredictor
 from src.ontology.skill_ontology import SkillOntology
 from src.evaluation.evaluator import Evaluator
+from src.utils import tracking
 from src.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -169,25 +170,52 @@ def evaluate_all(cfg: Settings, data: ProcessedData, content, collab, popularity
 
 
 def run(cfg: Settings, include_tier2: bool = False) -> dict[str, Any]:
-    data = DataPreprocessor(cfg).run(persist=True)
-    embedder = EmbeddingFeaturizer(
-        model_name=cfg.models["content_based"]["embedding_model"],
-        dim=cfg.models["content_based"]["embedding_dim"],
-    )
-    content, collab, popularity, hybrid = fit_classical(cfg, data, embedder)
-    two_tower, faiss_idx = fit_neural_retrieval(cfg, data, embedder)
-    bilateral = fit_reciprocal(cfg, data, two_tower)
-    ltr = fit_ltr(cfg, data, content, collab, popularity, two_tower, bilateral)
-    tier2 = fit_tier2(cfg, data) if include_tier2 else None
-    tier3 = fit_tier3(cfg, data)
-    save_artifacts(cfg, data=data, content=content, collab=collab, popularity=popularity,
-                   hybrid=hybrid, two_tower=two_tower, faiss_idx=faiss_idx, ltr=ltr,
-                   bilateral=bilateral, tier2=tier2, tier3=tier3)
-    report = evaluate_all(cfg, data, content, collab, popularity, hybrid)
-    log.info("Evaluation:\n%s", report.to_string(index=False))
-    return {"data": data, "content": content, "collab": collab, "popularity": popularity,
-            "hybrid": hybrid, "two_tower": two_tower, "faiss": faiss_idx, "ltr": ltr,
-            "bilateral": bilateral, "tier2": tier2, "tier3": tier3, "report": report}
+    with tracking.run("rs-overhaul", run_name="full-train"):
+        tracking.log_params({
+            "split_strategy": cfg.split.strategy,
+            "test_size": cfg.split.test_size,
+            "embedding_model": cfg.models["content_based"]["embedding_model"],
+            "embedding_dim": cfg.models["content_based"]["embedding_dim"],
+            "cf_n_factors": cfg.models["collaborative"]["n_factors"],
+            "cf_n_epochs": cfg.models["collaborative"]["n_epochs"],
+            "two_tower_emb_dim": cfg.models["two_tower"]["embedding_dim"],
+            "two_tower_epochs": cfg.models["two_tower"]["epochs"],
+            "ltr_objective": cfg.models["ltr"]["objective"],
+            "ltr_n_estimators": cfg.models["ltr"]["n_estimators"],
+            "include_tier2": include_tier2,
+            "data_source": cfg.data.source,
+        })
+        data = DataPreprocessor(cfg).run(persist=True)
+        embedder = EmbeddingFeaturizer(
+            model_name=cfg.models["content_based"]["embedding_model"],
+            dim=cfg.models["content_based"]["embedding_dim"],
+        )
+        content, collab, popularity, hybrid = fit_classical(cfg, data, embedder)
+        two_tower, faiss_idx = fit_neural_retrieval(cfg, data, embedder)
+        bilateral = fit_reciprocal(cfg, data, two_tower)
+        ltr = fit_ltr(cfg, data, content, collab, popularity, two_tower, bilateral)
+        tier2 = fit_tier2(cfg, data) if include_tier2 else None
+        tier3 = fit_tier3(cfg, data)
+        save_artifacts(cfg, data=data, content=content, collab=collab, popularity=popularity,
+                       hybrid=hybrid, two_tower=two_tower, faiss_idx=faiss_idx, ltr=ltr,
+                       bilateral=bilateral, tier2=tier2, tier3=tier3)
+        report = evaluate_all(cfg, data, content, collab, popularity, hybrid)
+        log.info("Evaluation:\n%s", report.to_string(index=False))
+        # Per-model headline metrics into MLflow
+        for _, row in report.iterrows():
+            name = str(row["model"])
+            for col in row.index:
+                if col == "model":
+                    continue
+                try:
+                    val = float(row[col])
+                except (TypeError, ValueError):
+                    continue
+                tracking.log_metrics({f"{name}_{col}".replace("@", "_at_"): val})
+        tracking.log_artifact(str(_artifacts_dir(cfg)))
+        return {"data": data, "content": content, "collab": collab, "popularity": popularity,
+                "hybrid": hybrid, "two_tower": two_tower, "faiss": faiss_idx, "ltr": ltr,
+                "bilateral": bilateral, "tier2": tier2, "tier3": tier3, "report": report}
 
 
 def main():

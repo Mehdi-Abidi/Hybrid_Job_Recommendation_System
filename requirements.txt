@@ -37,3 +37,7 @@ wordcloud==1.9.4
 # Testing
 pytest==8.3.4
 pytest-cov==6.0.0
+
+# Observability + implicit-feedback CF
+mlflow>=2.10
+implicit>=0.7.2
