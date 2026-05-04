@@ -29,6 +29,7 @@ from src.models.collaborative import CollaborativeRecommender
 from src.models.popularity import PopularityRecommender
 from src.models.hybrid import HybridRecommender, hybrid_config_from_settings
 from src.models.two_tower import TwoTowerTrainer
+from src.models.reciprocal import JobToUserTower, BilateralScorer, ReciprocalConfig
 from src.models.ltr_ranker import LTRRanker, LTRConfig, SignalProvider
 from src.retrieval.faiss_index import FaissJobIndex
 from src.models.bert4rec import BERT4RecTrainer, BERT4RecConfig
@@ -83,8 +84,27 @@ def fit_neural_retrieval(cfg: Settings, data: ProcessedData, embedder: Embedding
     return trainer, faiss_idx
 
 
-def fit_ltr(cfg: Settings, data: ProcessedData, content, collab, popularity, two_tower) -> LTRRanker:
-    sp = SignalProvider(two_tower=two_tower, content=content, collab=collab, popularity=popularity)
+def fit_reciprocal(cfg: Settings, data: ProcessedData, two_tower: TwoTowerTrainer) -> BilateralScorer:
+    """Train inverse (job→user) tower on flipped positive pairs and wrap with the
+    forward two-tower into a BilateralScorer. Reuses the forward tower's feature
+    matrices via shared TwoTowerArtifacts — no recomputation of features."""
+    rcfg_dict = cfg.models.get("reciprocal", {})
+    rcfg = ReciprocalConfig(
+        hidden_dims=tuple(rcfg_dict.get("hidden_dims", [256, 128])),
+        embedding_dim=rcfg_dict.get("embedding_dim", 128),
+        dropout=rcfg_dict.get("dropout", 0.2),
+        epochs=rcfg_dict.get("epochs", 10),
+        batch_size=rcfg_dict.get("batch_size", 512),
+        lr=rcfg_dict.get("lr", 1e-3),
+    )
+    inv = JobToUserTower(two_tower.artifacts, rcfg).fit(data.train)
+    return BilateralScorer(forward_tower=two_tower, inverse_tower=inv)
+
+
+def fit_ltr(cfg: Settings, data: ProcessedData, content, collab, popularity, two_tower,
+            bilateral: BilateralScorer | None = None) -> LTRRanker:
+    sp = SignalProvider(two_tower=two_tower, content=content, collab=collab,
+                        popularity=popularity, bilateral=bilateral)
     lcfg = cfg.models["ltr"]
     ltr = LTRRanker(LTRConfig(
         objective=lcfg["objective"], n_estimators=lcfg["n_estimators"],
@@ -120,6 +140,7 @@ def fit_tier3(cfg: Settings, data: ProcessedData) -> dict[str, Any]:
 def save_artifacts(cfg: Settings, *, data: ProcessedData,
                    content, collab, popularity, hybrid,
                    two_tower, faiss_idx, ltr,
+                   bilateral: BilateralScorer | None = None,
                    tier2: dict | None = None, tier3: dict | None = None) -> None:
     root = _artifacts_dir(cfg)
     content.save(root / "content_based")
@@ -128,6 +149,8 @@ def save_artifacts(cfg: Settings, *, data: ProcessedData,
     two_tower.save(root / "two_tower")
     faiss_idx.save(root / "faiss")
     ltr.save(root / "ltr")
+    if bilateral is not None:
+        bilateral.inv.save(root / "reciprocal")
     if tier3:
         tier3["ontology"].save(root / "ontology")
         tier3["salary"].save(root / "salary")
@@ -153,17 +176,18 @@ def run(cfg: Settings, include_tier2: bool = False) -> dict[str, Any]:
     )
     content, collab, popularity, hybrid = fit_classical(cfg, data, embedder)
     two_tower, faiss_idx = fit_neural_retrieval(cfg, data, embedder)
-    ltr = fit_ltr(cfg, data, content, collab, popularity, two_tower)
+    bilateral = fit_reciprocal(cfg, data, two_tower)
+    ltr = fit_ltr(cfg, data, content, collab, popularity, two_tower, bilateral)
     tier2 = fit_tier2(cfg, data) if include_tier2 else None
     tier3 = fit_tier3(cfg, data)
     save_artifacts(cfg, data=data, content=content, collab=collab, popularity=popularity,
                    hybrid=hybrid, two_tower=two_tower, faiss_idx=faiss_idx, ltr=ltr,
-                   tier2=tier2, tier3=tier3)
+                   bilateral=bilateral, tier2=tier2, tier3=tier3)
     report = evaluate_all(cfg, data, content, collab, popularity, hybrid)
     log.info("Evaluation:\n%s", report.to_string(index=False))
     return {"data": data, "content": content, "collab": collab, "popularity": popularity,
             "hybrid": hybrid, "two_tower": two_tower, "faiss": faiss_idx, "ltr": ltr,
-            "tier2": tier2, "tier3": tier3, "report": report}
+            "bilateral": bilateral, "tier2": tier2, "tier3": tier3, "report": report}
 
 
 def main():

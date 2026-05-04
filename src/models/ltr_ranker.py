@@ -23,13 +23,18 @@ class LTRConfig:
     seed: int = 42
 
 
-# SignalProvider: returns (two_tower, content, collab, popularity) for a user over a list of candidate job_ids.
+# SignalProvider: returns (two_tower, content, collab, popularity[, bilateral]) for a
+# user over a list of candidate job_ids. Bilateral signals (forward score, inverse
+# score, sigmoid-product) are filled when a BilateralScorer is supplied; otherwise
+# RankingSignals leaves those fields None and downstream feature-builders treat them
+# as zero, keeping the LTR feature vector dimensionality stable.
 class SignalProvider:
-    def __init__(self, two_tower, content, collab, popularity):
+    def __init__(self, two_tower, content, collab, popularity, bilateral=None):
         self.two_tower = two_tower      # TwoTowerTrainer or None
         self.content = content          # ContentBasedRecommender or None
         self.collab = collab            # CollaborativeRecommender or None
         self.popularity = popularity    # PopularityRecommender or None
+        self.bilateral = bilateral      # BilateralScorer or None
 
     def compute(self, user_id: int, candidate_job_ids: list[int]) -> RankingSignals:
         n = len(candidate_job_ids)
@@ -40,7 +45,11 @@ class SignalProvider:
             else np.full(n, 3.0, dtype=np.float32)
         pop = self.popularity.score_pairs(candidate_job_ids) if self.popularity is not None \
             else np.zeros(n, dtype=np.float32)
-        return RankingSignals(two_tower=tt, content=ct, collab=cf, popularity=pop)
+        s_uj = s_ju = bilat = None
+        if self.bilateral is not None:
+            s_uj, s_ju, bilat = self.bilateral.score(user_id, candidate_job_ids)
+        return RankingSignals(two_tower=tt, content=ct, collab=cf, popularity=pop,
+                              s_user_to_job=s_uj, s_job_to_user=s_ju, bilateral=bilat)
 
     def _two_tower_scores(self, user_id: int, candidate_job_ids: list[int]) -> np.ndarray:
         art = self.two_tower.artifacts

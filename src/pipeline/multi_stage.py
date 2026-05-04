@@ -17,6 +17,7 @@ from src.models.popularity import PopularityRecommender
 from src.models.two_tower import TwoTowerTrainer
 from src.models.ltr_ranker import LTRRanker
 from src.models.llm_reranker import LLMReranker
+from src.models.reciprocal import BilateralScorer
 from src.retrieval.faiss_index import FaissJobIndex
 from src.utils.logging import get_logger
 
@@ -32,6 +33,7 @@ class PipelineStages:
     popularity: PopularityRecommender | None = None
     ltr: LTRRanker | None = None
     llm: LLMReranker | None = None
+    bilateral: BilateralScorer | None = None
 
 
 @dataclass
@@ -82,11 +84,34 @@ class MultiStagePipeline:
             return retrieved[:self.n_rank]
         return self.s.ltr.rank(user_id, cand_ids)[:self.n_rank]
 
-    # Stage 3: LLM re-rank + explanations.
+    # Compute bilateral scores for a list of job_ids (or None if no scorer wired).
+    # Returned dicts are keyed by job_id; absent keys mean the scorer wasn't available.
+    def _bilateral_map(self, user_id: int, job_ids: list[int]) -> tuple[dict[int, float], dict[int, float], dict[int, float]]:
+        if self.s.bilateral is None or not job_ids:
+            return {}, {}, {}
+        s_uj, s_ju, bilat = self.s.bilateral.score(int(user_id), [int(j) for j in job_ids])
+        return (
+            {int(j): float(s_uj[i]) for i, j in enumerate(job_ids)},
+            {int(j): float(s_ju[i]) for i, j in enumerate(job_ids)},
+            {int(j): float(bilat[i]) for i, j in enumerate(job_ids)},
+        )
+
+    # Stage 3: LLM re-rank + explanations. Bilateral scores (when available) are
+    # surfaced in stage_scores and embedded in the LLM prompt for richer reasoning.
     def _rerank(self, user_id: int, ranked: list[tuple[int, float]]) -> list[Recommendation]:
+        ranked_ids = [j for j, _ in ranked]
+        s_uj_map, s_ju_map, bilat_map = self._bilateral_map(user_id, ranked_ids)
+
         if self.s.llm is None:
-            return [Recommendation(job_id=j, score=s, explanation="", stage_scores={"ltr": s})
-                    for j, s in ranked[:self.n_final]]
+            recs: list[Recommendation] = []
+            for j, s in ranked[:self.n_final]:
+                ss: dict[str, float] = {"ltr": float(s)}
+                if j in bilat_map:
+                    ss["s_user_to_job"] = s_uj_map[j]
+                    ss["s_job_to_user"] = s_ju_map[j]
+                    ss["bilateral"] = bilat_map[j]
+                recs.append(Recommendation(job_id=j, score=float(s), explanation="", stage_scores=ss))
+            return recs
 
         user_row = self.users[self.users["user_id"] == user_id]
         user_profile = user_row.iloc[0].to_dict() if not user_row.empty else {"user_id": user_id}
@@ -96,21 +121,26 @@ class MultiStagePipeline:
             if jid not in jobs_by_id.index:
                 continue
             jr = jobs_by_id.loc[jid]
-            candidates.append({
+            cand: dict[str, Any] = {
                 "job_id": int(jid), "title": str(jr.get("title", "")),
                 "category": str(jr.get("category", "")), "seniority": str(jr.get("seniority", "")),
                 "location": str(jr.get("location", "")), "skills": str(jr.get("skills", "")),
                 "prior_score": float(prior_score),
-            })
+            }
+            if jid in bilat_map:
+                cand["bilateral_score"] = bilat_map[jid]
+            candidates.append(cand)
         reranked = self.s.llm.rerank(user_profile, candidates, n=self.n_final)
         prior_map = dict(ranked)
-        return [
-            Recommendation(
-                job_id=jid, score=float(score), explanation=reason,
-                stage_scores={"ltr": float(prior_map.get(jid, 0.0)), "llm": float(score)},
-            )
-            for jid, score, reason in reranked
-        ]
+        recs = []
+        for jid, score, reason in reranked:
+            ss = {"ltr": float(prior_map.get(jid, 0.0)), "llm": float(score)}
+            if jid in bilat_map:
+                ss["s_user_to_job"] = s_uj_map[jid]
+                ss["s_job_to_user"] = s_ju_map[jid]
+                ss["bilateral"] = bilat_map[jid]
+            recs.append(Recommendation(job_id=jid, score=float(score), explanation=reason, stage_scores=ss))
+        return recs
 
     def recommend(self, user_id: int, exclude_seen: bool = True) -> list[Recommendation]:
         retrieved = self._retrieve(int(user_id))
@@ -126,12 +156,17 @@ class MultiStagePipeline:
         return recs
 
     # Introspection: return each stage's candidates for debugging / UI inspection.
+    # Bilateral scores are included when a BilateralScorer is wired in — empty otherwise.
     def inspect(self, user_id: int) -> dict[str, Any]:
         retrieved = self._retrieve(int(user_id))
         ranked = self._rank(int(user_id), retrieved)
         final = self._rerank(int(user_id), ranked)
-        return {
+        out: dict[str, Any] = {
             "retrieval": retrieved,
             "ranking": ranked,
             "final": [(r.job_id, r.score, r.explanation) for r in final],
         }
+        if self.s.bilateral is not None and ranked:
+            _, _, bilat_map = self._bilateral_map(user_id, [j for j, _ in ranked])
+            out["bilateral"] = sorted(bilat_map.items(), key=lambda x: -x[1])
+        return out

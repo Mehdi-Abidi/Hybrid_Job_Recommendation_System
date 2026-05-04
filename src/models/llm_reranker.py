@@ -18,7 +18,11 @@ SYSTEM_PROMPT = (
     "reason for each ranking. Respond ONLY with a JSON object of the form "
     '{"ranked": [{"job_id": int, "score": float, "reason": string}, ...]}. '
     "Scores should be in [0, 1] where 1 is a perfect match. Focus on matching skills, "
-    "experience level, location preference, and career trajectory."
+    "experience level, location preference, and career trajectory. "
+    "When a 'Bilateral fit' value is provided, treat it as a model-estimated probability "
+    "that BOTH the seeker would apply AND the recruiter would shortlist; prefer "
+    "candidates with higher bilateral fit when other signals are comparable, and reflect "
+    "this two-sided reasoning in the reason string."
 )
 
 
@@ -51,10 +55,12 @@ def _format_user(user_profile: dict[str, Any]) -> str:
 def _format_candidates(candidates: list[dict[str, Any]]) -> str:
     lines = []
     for c in candidates:
+        bilat = c.get("bilateral_score")
+        bilat_str = f" | Bilateral fit: {bilat:.3f}" if bilat is not None else ""
         lines.append(
             f"- job_id={c['job_id']} | {c.get('title','')} ({c.get('category','')}, {c.get('seniority','')}) | "
             f"Location: {c.get('location','')} | Skills: {c.get('skills','')} | "
-            f"Prior rank score: {c.get('prior_score', 0):.3f}"
+            f"Prior rank score: {c.get('prior_score', 0):.3f}{bilat_str}"
         )
     return "Candidates:\n" + "\n".join(lines)
 

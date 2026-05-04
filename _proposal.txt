@@ -1,0 +1,172 @@
+
+Affiliation:
+Specialization:
+Department:
+Domain
+Proposal Title:
+Desired Starting Date
+Proposed Duration
+(Max months)
+Required Budget
+US dollars
+Domain
+Investigator’s Affiliation ( Dept. / College )
+Academic Title
+Team members
+External Investigator
+
+Abstract
+
+.
+Keywords:
+Introduction
+Literature Review
+Description (Rationale) Of the Proposed Work
+Research Objectives
+The tables 4.1 and 4.2 maps the objectives, approaches, phases, and the tasks carried out to implement the objectives.
+Table 4.1 OBJECTIVES AND THEIR APPROACH MAPPING
+Objective
+Approach for achieving the objective
+1
+2
+3
+4
+5
+6
+7
+8
+Table 4.2 OBJECTIVE PHASES AND TASKS MAPPING
+Objectives
+Phases
+Tasks
+1
+2, 3 & 7
+4, 5 & 7
+4
+5 & 6
+7 & 8
+Scope
+6. Research Design
+.
+The project will consist of the following phases:
+6.1.1Phase 1: Comprehensive Literature Review
+6.1.2Phase 2: Data Collection
+6.1.3Phase 3: Data-pre-processing (Feature Extraction)
+6.1.4Phase 4: Deep learning model and Probabilistic graphical model
+6.1.5Phase 5: Evaluation
+6.1.6Phase 6: Tool Development
+6.1.7Phase 7: Writing-up and documentation
+Research Methodology
+Management & Working Plans with Team Roles
+8.1 Management Plan, Research Team, Roles, and Tasks
+project. The full papers will be included in the final report as appendices of the report.
+Table 8.1 and 8.2 introduce and details the research team, their roles, tasks carried out by the team members and their timelines.
+Table 8.1ROLE AND INVOLVEMENT DURATION OF RESEARCH TEAM
+Team Members
+Role
+Duration
+(months)
+Senior Personnel:
+Table 8.2 PROJECT TIMELINE MAPPED WITH THE TEAM ROLES AND PHASES
+8.2 Project Outcomes and deliverables
+
+Table 8.3 maps the project outcomes with the strategic technology goals
+
+Table 8.3 RELATIONSHIP TO STRATEGIC FRAMEWORK
+PROJECT
+EXPECTED
+OUTCOMES
+STRATEGIC TECHNOLOGY PROGRAM GOALS
+PROJECT
+OBJECTIVE
+ACHIEVED
+GOAL 1
+GOAL 2
+
+GOAL3
+1 (Original research)
+7 & 8
+2 (AI-enable system for abnormality detection)
+1, 3, 5 & 6
+3 (SA to learn normal and abnormally situation)
+2 & 4
+9. Utilization
+10. Project Budget
+Table 10.1 shows the proposed budget of the project and table 11.2 provides the justifications of the budget. We have divided the project into two phases, first half and second half.
+
+Table 1`.1 PROPOSED BUDGET
+: 
+SUMMARY
+PROPOSED BUDGET
+ Dollars ($)
+PROJECT TITLE
+DURATION
+MONTHS
+ITEM
+CATEGORY
+NO.
+COMPENSATION
+FIRST HALF
+SECOND HALF
+TOTAL
+MONTHS
+BUDGET
+MONTHS
+BUDGET
+A-Research Team
+CONSULTANTS
+
+PRINCIPAL INVESTIGATOR
+1
+CO-INVESTIGATOR-2
+1
+TOTAL-A
+B-Assistants
+PHD STUDENTS
+
+MS STUDENTS
+1
+UNDERGRADUATE STUDENTS
+3
+TECHNICIANS
+1
+SECRETARIAL- CLERICAL
+OTHER (programmers and developers)
+2 
+TOTAL-B
+C- Computer Services & Consultants
+Computer Service(Connection and telecommnication costs)
+Internet connection and communicatin needs
+ CONSULTANT
+1
+Consultant Services
+TOTAL-C
+
+D- EQUIP.
+& MATERIAL
+ MAJOR EQUIPMENTS (< = 100.000)
+  EQUIPMENTS Major (> 100,000)
+   EQUIPMENTS Minor (> 10,000)
+
+ CONFERENCES
+
+ PATENT REGISTRATION
+ PUBLICATIONS
+
+ WORKSHOP
+-
+OTHER EXPENSES 
+ITEM TOTAL
+GRAND TOTAL
+
+A. SALARIES (Research Team)
+12.45%
+B. SALARIES (Assistants)
+28.32%
+C. Computer Services & Consultants
+9.08% 
+D. EQUIP. & MATERIAL
+50.15% 
+GRAND TOTAL
+100 %
+REFERENCES

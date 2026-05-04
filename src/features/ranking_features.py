@@ -10,6 +10,9 @@ from src.features.structured_features import parse_skills
 
 
 # Ordered feature names — keep stable so saved boosters match feature vectors.
+# Bilateral features are appended at the end so legacy boosters (without them) can
+# still be loaded by trimming the trailing columns; the SignalProvider zero-fills
+# them when no reciprocal model is wired in.
 FEATURE_NAMES: list[str] = [
     "two_tower_score",
     "content_score",
@@ -22,16 +25,27 @@ FEATURE_NAMES: list[str] = [
     "salary_alignment",
     "days_since_posted",
     "user_hist_apply_rate_in_category",
+    "s_user_to_job",
+    "s_job_to_user",
+    "bilateral_score",
 ]
 
 
 @dataclass
 class RankingSignals:
-    """Per-(user, job) signals built from stage-1 models + raw frames."""
+    """Per-(user, job) signals built from stage-1 models + raw frames.
+
+    `s_user_to_job`, `s_job_to_user`, `bilateral_score` come from the BilateralScorer.
+    They default to zero arrays so callers without a reciprocal model continue to work
+    — the booster simply learns a near-zero importance for those columns.
+    """
     two_tower: np.ndarray       # (n_pairs,)
     content: np.ndarray
     collab: np.ndarray
     popularity: np.ndarray
+    s_user_to_job: np.ndarray | None = None
+    s_job_to_user: np.ndarray | None = None
+    bilateral: np.ndarray | None = None
 
 
 def _experience_match(user_years: int, job_seniority: str) -> float:
@@ -105,6 +119,10 @@ def build_ranking_features(
         cat = str(j.get("category", "")) if j is not None else ""
         apply_rate = (user_cat_apply_rates or {}).get((int(user_id), cat), 0.0)
 
+        s_uj = float(signals.s_user_to_job[i]) if signals.s_user_to_job is not None else 0.0
+        s_ju = float(signals.s_job_to_user[i]) if signals.s_job_to_user is not None else 0.0
+        bilat = float(signals.bilateral[i]) if signals.bilateral is not None else 0.0
+
         feats[i] = [
             float(signals.two_tower[i]),
             float(signals.content[i]),
@@ -117,5 +135,6 @@ def build_ranking_features(
             sal_align,
             posted,
             float(apply_rate),
+            s_uj, s_ju, bilat,
         ]
     return feats

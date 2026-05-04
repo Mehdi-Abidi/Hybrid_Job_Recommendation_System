@@ -76,3 +76,49 @@ def intra_list_diversity(recommended: list[int], item_embeddings: np.ndarray,
 def mean_metric(per_user: list[float]) -> float:
     arr = [x for x in per_user if x is not None]
     return float(np.mean(arr)) if arr else 0.0
+
+
+# --- Reciprocal recommendation metrics (SIGKDD'24 "Revisiting Reciprocal RS") -----
+#
+# Each (user, job) recommendation has two scores: user_score (does user want job?)
+# and job_score (does job's recruiter want user?). Bilateral metrics check that the
+# system scores well on BOTH sides, not just one.
+
+def bilateral_coverage(recommended: list[int],
+                       user_scores: dict[int, float],
+                       job_scores: dict[int, float]) -> float:
+    """Fraction of recommended jobs that score above the per-side median on BOTH sides.
+
+    Penalises one-sided systems: a recommender that nails user preference but the
+    recruiter would never shortlist gets a low bilateral_coverage. Medians are
+    computed over the recommended set itself (self-referential threshold) so the
+    metric is comparable across users with different score scales.
+    """
+    if not recommended:
+        return 0.0
+    u = np.array([user_scores.get(j, 0.0) for j in recommended], dtype=np.float32)
+    v = np.array([job_scores.get(j, 0.0) for j in recommended], dtype=np.float32)
+    u_med, v_med = float(np.median(u)), float(np.median(v))
+    both = ((u >= u_med) & (v >= v_med)).mean()
+    return float(both)
+
+
+def balanced_ranking_ratio(user_side_ndcg: float, job_side_ndcg: float) -> float:
+    """Ratio of the smaller-side NDCG to the larger-side NDCG. 1.0 = perfectly balanced.
+
+    Catches asymmetric optimisation: a system can hit high user-side NDCG while the
+    recruiter side trails badly. Returns 0.0 when either side is undefined.
+    """
+    a, b = float(user_side_ndcg), float(job_side_ndcg)
+    if a <= 0 or b <= 0:
+        return 0.0
+    return min(a, b) / max(a, b)
+
+
+def two_sided_ndcg(user_side_ndcg: float, job_side_ndcg: float) -> float:
+    """Geometric mean of user-side and job-side NDCG@K. Punishes any one-sided collapse.
+
+    Geometric (vs. arithmetic) mean: a system with NDCG=(0.9, 0.0) gets 0.0 here, not 0.45.
+    """
+    a, b = max(float(user_side_ndcg), 0.0), max(float(job_side_ndcg), 0.0)
+    return float(np.sqrt(a * b))
