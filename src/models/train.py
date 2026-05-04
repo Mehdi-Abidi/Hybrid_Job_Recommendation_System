@@ -110,6 +110,8 @@ def fit_ltr(cfg: Settings, data: ProcessedData, content, collab, popularity, two
     ltr = LTRRanker(LTRConfig(
         objective=lcfg["objective"], n_estimators=lcfg["n_estimators"],
         learning_rate=lcfg["learning_rate"], max_depth=lcfg["max_depth"],
+        n_random_negatives=lcfg.get("n_random_negatives", 50),
+        n_hard_negatives=lcfg.get("n_hard_negatives", 5),
     ), sp).fit(data.users, data.jobs, data.train)
     return ltr
 

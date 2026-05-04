@@ -53,10 +53,12 @@ models:
     lr: 0.001
     negatives_per_positive: 4
   ltr:
-    objective: rank:ndcg
+    objective: rank:pairwise   # LambdaRank — beats pointwise for job rec
     n_estimators: 500
     learning_rate: 0.05
     max_depth: 6
+    n_random_negatives: 50     # per positive — Facebook KDD 2020 recipe
+    n_hard_negatives: 5        # same-category not-seen negatives
   reciprocal:
     embedding_dim: 128
     hidden_dims: [256, 128]

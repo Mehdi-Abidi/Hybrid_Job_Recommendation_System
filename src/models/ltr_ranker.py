@@ -16,11 +16,13 @@ log = get_logger(__name__)
 
 @dataclass
 class LTRConfig:
-    objective: str = "rank:ndcg"
-    n_estimators: int = 200
-    learning_rate: float = 0.1
+    objective: str = "rank:pairwise"
+    n_estimators: int = 500
+    learning_rate: float = 0.05
     max_depth: int = 6
     seed: int = 42
+    n_random_negatives: int = 50
+    n_hard_negatives: int = 5
 
 
 # SignalProvider: returns (two_tower, content, collab, popularity[, bilateral]) for a
@@ -84,16 +86,59 @@ class LTRRanker:
         self._jobs: pd.DataFrame | None = None
         self._users: pd.DataFrame | None = None
 
-    # Build a training-ready (X, y, group) from train interactions.
+    # Build (X, y, group) with binary relevance + sampled negatives. For each user:
+    # positives = their interacted jobs (label 1); negatives = `n_random_negatives`
+    # uniformly sampled unseen jobs + `n_hard_negatives` per positive drawn from the
+    # same category (label 0). LambdaRank then learns to rank positives above
+    # both classes of negatives, including near-positives (Facebook KDD 2020).
     def _build_training_matrix(self, users: pd.DataFrame, jobs: pd.DataFrame,
                                train: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         self._apply_rates = user_category_apply_rates(train, jobs)
+        rng = np.random.default_rng(self.cfg.seed)
+        all_job_ids = jobs["job_id"].astype(int).to_numpy()
+        has_cat = "category" in jobs.columns
+        job_to_cat: dict[int, str] = (
+            dict(zip(jobs["job_id"].astype(int), jobs["category"].astype(str)))
+            if has_cat else {}
+        )
+        cat_to_jobs: dict[str, np.ndarray] = (
+            {c: jobs.loc[jobs["category"] == c, "job_id"].astype(int).to_numpy()
+             for c in jobs["category"].dropna().unique()}
+            if has_cat else {}
+        )
+
         X_parts, y_parts, group_sizes = [], [], []
         for uid, g in train.sort_values("user_id").groupby("user_id", sort=False):
-            cand = g["job_id"].astype(int).tolist()
-            labels = g["rating"].astype(float).to_numpy()
-            sigs = self.signals.compute(int(uid), cand)
-            feats = build_ranking_features(int(uid), cand, users, jobs, sigs, self._apply_rates)
+            positives = g["job_id"].astype(int).to_numpy()
+            seen = set(int(j) for j in positives)
+            n_pos = len(positives)
+            # Random negatives: oversample to handle the seen-set filter, then truncate.
+            target_random = self.cfg.n_random_negatives * n_pos
+            pool = rng.choice(all_job_ids, size=target_random * 2, replace=True)
+            neg_random = np.array(
+                [int(j) for j in pool if int(j) not in seen][:target_random],
+                dtype=int,
+            )
+            # Hard negatives: same category as a positive, not seen.
+            hard: list[int] = []
+            if has_cat:
+                for pj in positives:
+                    cat_pool = cat_to_jobs.get(job_to_cat.get(int(pj), ""))
+                    if cat_pool is None or len(cat_pool) == 0:
+                        continue
+                    pick = rng.choice(cat_pool, size=min(self.cfg.n_hard_negatives,
+                                                        len(cat_pool)), replace=False)
+                    hard.extend(int(j) for j in pick if int(j) not in seen)
+            cand = np.concatenate(
+                [positives, neg_random, np.array(hard, dtype=int)]
+            ).astype(int)
+            labels = np.concatenate([
+                np.ones(n_pos, dtype=np.float32),
+                np.zeros(len(neg_random) + len(hard), dtype=np.float32),
+            ])
+            sigs = self.signals.compute(int(uid), cand.tolist())
+            feats = build_ranking_features(int(uid), cand.tolist(), users, jobs,
+                                           sigs, self._apply_rates)
             X_parts.append(feats)
             y_parts.append(labels)
             group_sizes.append(len(cand))
