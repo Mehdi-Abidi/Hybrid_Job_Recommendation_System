@@ -963,3 +963,143 @@ Each variant evaluated on: Precision@10, NDCG@10, Recall@50, Coverage, Diversity
 8. Evaluation notebook shows clear performance gains from V1 → V7 across all metrics
 9. Bi-directional matching works — recruiter selects job, sees ranked candidates with LLM-drafted outreach
 10. Skill gap analysis produces coherent learning suggestions grounded in ontology
+
+---
+
+# PART III — Differentiation Layer (Reciprocal Recommendation + Defensive Novelty)
+
+This part was added after a supervisor concern that hybrid job RS is well-trodden. It establishes our defensible novelty and adds the one piece of code needed to back it up. See `how_we_are_different.md` for the full competitor analysis and sourced references.
+
+## 22. The Five Differentiators
+
+Each maps to concrete code in the repo. The novelty is the *integration* — no published system (LinkedIn LiRank/JUDE, ZipRecruiter, Indeed) combines all five.
+
+| # | Differentiator | Code mapping |
+|---|---|---|
+| **D1** | LLM-grounded explanations citing ESCO skill IDs + resume NER entities | `src/models/llm_reranker.py` + `src/nlp/resume_parser.py` + `src/ontology/skill_graph.py` |
+| **D2** | Ontology-weighted skill transferability (Django↔Flask = 0.85, not 0) | `src/ontology/skill_graph.py` + `src/ontology/esco_loader.py` + `src/features/ranking_features.py` |
+| **D3** | First-class reciprocal recommendation — bilateral score `P(apply) × P(shortlist)` | `src/models/reciprocal.py` (NEW) + `src/pipeline/multi_stage.py` |
+| **D4** | 4-stage pipeline including Stage-4 enrichment (salary + skill-gap roadmap + career path) | `src/models/salary_predictor.py` + `src/models/skill_gap.py` + `src/models/career_path.py` |
+| **D5** | Auditable per-stage decomposition (Pipeline Inspector) | Streamlit Pipeline Inspector tab + `GET /pipeline/inspect/{user_id}` |
+
+D1, D2, D4, D5 are already covered by Parts I–II. D3 requires the new code below.
+
+---
+
+## 23. Reciprocal Recommendation Upgrade (NEW — for D3)
+
+### 23.1 Why this matters
+
+Industry systems (LinkedIn, Indeed, ZipRecruiter) are job-seeker-centric or recruiter-centric, not both. Reciprocal RS — modeling *both* sides' preferences and combining them — is an active 2024 research frontier (SIGKDD'24 "Revisiting Reciprocal Recommender Systems", AAAI'24, SIGIR'24 MIRROR) but has not landed in production at scale. Without this, our D3 claim is just text in a proposal with no code behind it.
+
+### 23.2 Architecture
+
+```
+                      ┌────────────────────────┐
+   user features ──▶  │  UserTower             │ ──▶ user_emb
+                      └────────────────────────┘
+                                                       ╲
+                                                        × dot ──▶ s_user_to_job
+                                                       ╱
+                      ┌────────────────────────┐
+   job features ──▶   │  JobTower              │ ──▶ job_emb
+                      └────────────────────────┘
+
+                      ┌────────────────────────┐
+   job features ──▶   │  JobToUserTower (NEW)  │ ──▶ recruiter_pref_emb
+                      └────────────────────────┘
+                                                       ╲
+                                                        × dot ──▶ s_job_to_user
+                                                       ╱
+                      ┌────────────────────────┐
+   user features ──▶  │  UserAsCandidateTower  │ ──▶ candidate_emb
+                      └────────────────────────┘   (reuse UserTower or sibling head)
+
+   bilateral_score = sigmoid(s_user_to_job) × sigmoid(s_job_to_user)
+```
+
+The forward direction is the existing two-tower. The inverse direction (`JobToUserTower`) is trained on the **same interaction data flipped** — for each (user, job) positive pair, the recruiter-side model learns "which users would this job's recruiter shortlist."
+
+### 23.3 Training data
+
+- **Positive pairs**: same as forward direction — (user, job) where action ∈ {save, apply}
+- **Negative sampling**: in-batch negatives, recruiter-side
+- **Loss**: BPR or in-batch softmax on the inverse direction
+- **Shortlist signal proxy**: in absence of true recruiter labels, treat `apply` as positive bilateral signal (user wants the job *and* the job's profile fits the user). Future work could use recruiter-response data if available.
+
+### 23.4 Integration into the multi-stage pipeline
+
+- **Stage 1 (Retrieval)**: unchanged — two-tower + FAISS + LightGCN + Mult-VAE produce candidate union.
+- **Stage 2 (Ranking)**: LambdaMART feature vector gains 3 new features:
+  - `s_user_to_job` (forward two-tower score)
+  - `s_job_to_user` (inverse tower score)
+  - `bilateral_score` (product)
+- **Stage 2 ensemble final score**: `α × LambdaMART + β × DeepFM + γ × bilateral_score`, weights tuned on validation.
+- **Stage 3 (LLM re-rank)**: prompt includes both directions' contributions for richer reasoning ("you'd likely apply, and your profile matches their typical hire").
+
+### 23.5 New evaluation metrics (from SIGKDD'24)
+
+Added to `src/evaluation/metrics.py`:
+
+- **`bilateral_coverage`** — fraction of recommended pairs where *both* sides score above their respective median. Penalizes systems that only optimize one side.
+- **`balanced_ranking_ratio`** — ratio of NDCG when ranking from user-side vs. recruiter-side. Closer to 1.0 = more balanced.
+- **`two_sided_ndcg`** — geometric mean of user-side NDCG@K and recruiter-side NDCG@K.
+
+### 23.6 New files / modifications
+
+| File | Status | Purpose |
+|---|---|---|
+| `src/models/reciprocal.py` | NEW | `JobToUserTower`, `BilateralScorer`, `ReciprocalTrainer` |
+| `src/pipeline/multi_stage.py` | MODIFY | Wire bilateral score into Stage-2 ensemble; pass to Stage-3 LLM prompt |
+| `src/evaluation/metrics.py` | MODIFY | Add `bilateral_coverage`, `balanced_ranking_ratio`, `two_sided_ndcg` |
+| `src/features/ranking_features.py` | MODIFY | Add `s_user_to_job`, `s_job_to_user`, `bilateral_score` features |
+| `tests/test_reciprocal.py` | NEW | Unit tests: forward/inverse score symmetry sanity, bilateral score range, metric correctness on toy data |
+| `notebooks/04_multi_stage_evaluation.ipynb` | MODIFY | Add reciprocal-metrics row to V1→V7 comparison; add a V8 with bilateral scoring |
+| `models_artifacts/reciprocal_tower.pt` | NEW (build artifact) | Trained inverse tower weights |
+| `models_artifacts/bilateral_scorer.pkl` | NEW (build artifact) | Serialized scorer |
+
+### 23.7 Timeline (slots into existing schedule)
+
+| Days | Task |
+|---|---|
+| 64-65 | Implement `JobToUserTower` + flipped data loader |
+| 66 | Train inverse tower; sanity-check with held-out interactions |
+| 67 | `BilateralScorer` + integration into LambdaMART feature vector |
+| 68 | Add new metrics; rerun V7 evaluation with bilateral; produce V8 row |
+| 69 | Tests + documentation + LLM-prompt update for Stage 3 |
+
+Total: ~5-6 days. **New project total: ~69 days.**
+
+---
+
+## 24. Updated Evaluation Strategy (extends Section 19)
+
+| Variant | Retrieval | Ranking | Re-ranking | Enrichment | Reciprocal |
+|---|---|---|---|---|---|
+| V1–V7 | (as in §19) | | | | — |
+| **V8 Full + Reciprocal** | All retrieval sources | LambdaMART + DeepFM + bilateral | LLM + BERT4Rec (bilateral-aware prompt) | Salary + Career + Gaps | **Yes** |
+
+V8 is evaluated on the standard metrics **plus** `bilateral_coverage`, `balanced_ranking_ratio`, `two_sided_ndcg`. Expectation: V8 lifts bilateral metrics meaningfully over V7 with at most a small (<2%) loss on user-side NDCG@10 — the trade-off that makes reciprocal recommendation defensible.
+
+---
+
+## 25. Sections DROPPED from Proposal Document
+
+Recorded here so the plan stays the source of truth. The following sample-template fields were explicitly dropped (user-approved) from `Project_Proposal.md`:
+
+- Required Budget field in header block
+- Section 10 Project Budget (entire — Tables 10.1, 11.2, A/B/C/D percentage breakdown)
+- External Investigator row in header block
+- Table 8.3 Strategic Technology Program Goals (GOAL 1/2/3 mapping)
+
+Phase 4 was also reworded from *"Deep learning model and Probabilistic graphical model"* to *"Multi-Stage Neural Pipeline + Reciprocal Matching"* — no PGM/LDA/PMF padding added; the plan is honest about what's actually built.
+
+---
+
+## 26. Final Verification (extends Section 21)
+
+11. Reciprocal upgrade lands: `pytest tests/test_reciprocal.py` passes
+12. `GET /recommend/multi-stage/{user_id}` returns `bilateral_score` per item alongside per-stage scores
+13. Evaluation notebook reports `bilateral_coverage`, `balanced_ranking_ratio`, `two_sided_ndcg` for V8 alongside Precision@10/NDCG@10
+14. Each of the 5 differentiators (D1–D5) maps to a real code file (verification checklist in `how_we_are_different.md` §5)
+15. Every paper cited in `Project_Proposal.md` and `how_we_are_different.md` has a working DOI/arXiv link

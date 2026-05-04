@@ -28,6 +28,8 @@ FEATURE_NAMES: list[str] = [
     "s_user_to_job",
     "s_job_to_user",
     "bilateral_score",
+    "hybrid_score",
+    "bert4rec_score",
 ]
 
 
@@ -36,8 +38,11 @@ class RankingSignals:
     """Per-(user, job) signals built from stage-1 models + raw frames.
 
     `s_user_to_job`, `s_job_to_user`, `bilateral_score` come from the BilateralScorer.
-    They default to zero arrays so callers without a reciprocal model continue to work
-    — the booster simply learns a near-zero importance for those columns.
+    `hybrid` is the legacy weighted-combiner score (kept as a feature, not the final
+    ranker — Task 8). `bert4rec` is the sequence model's next-item score (Task 9).
+    All optional fields default to None and the feature builder zero-fills them so
+    saved boosters with prior columns can still be loaded by trimming the trailing
+    columns.
     """
     two_tower: np.ndarray       # (n_pairs,)
     content: np.ndarray
@@ -46,6 +51,8 @@ class RankingSignals:
     s_user_to_job: np.ndarray | None = None
     s_job_to_user: np.ndarray | None = None
     bilateral: np.ndarray | None = None
+    hybrid: np.ndarray | None = None
+    bert4rec: np.ndarray | None = None
 
 
 def _experience_match(user_years: int, job_seniority: str) -> float:
@@ -56,11 +63,24 @@ def _experience_match(user_years: int, job_seniority: str) -> float:
     return max(0.0, 1.0 - min(abs(user_years - lo), abs(user_years - hi)) / 10.0)
 
 
-def _salary_alignment(user_years: int, sal_min: float, sal_max: float) -> float:
-    # Heuristic: expected comp ≈ 70k + 12k * years, clipped to job range width.
+def _salary_alignment(user_years: int, sal_min: float, sal_max: float,
+                      salary_model=None, job_features: dict | None = None) -> float:
+    """Alignment between user's expected comp and the job's salary band.
+
+    When `salary_model` and `job_features` are provided, prefer the learned salary
+    band (Indeed/LinkedIn approach). Falls back to the posted band; if that's also
+    missing, falls back to the original "70k + 12k*years" heuristic.
+    """
+    expected = 70_000 + 12_000 * user_years
+    if salary_model is not None and job_features is not None:
+        try:
+            pred = salary_model.predict(**job_features)
+            sal_min = float(pred.salary_min) or sal_min
+            sal_max = float(pred.salary_max) or sal_max
+        except Exception:
+            pass
     if not np.isfinite(sal_min) or not np.isfinite(sal_max) or sal_max <= 0:
         return 0.0
-    expected = 70_000 + 12_000 * user_years
     if sal_min <= expected <= sal_max:
         return 1.0
     gap = min(abs(expected - sal_min), abs(expected - sal_max))
@@ -87,6 +107,7 @@ def build_ranking_features(
     users: pd.DataFrame, jobs: pd.DataFrame,
     signals: RankingSignals,
     user_cat_apply_rates: dict[tuple[int, str], float] | None = None,
+    salary_model=None,
 ) -> np.ndarray:
     user_row = users[users["user_id"] == user_id]
     if user_row.empty:
@@ -113,8 +134,18 @@ def build_ranking_features(
 
         loc_match = 1.0 if j is not None and str(j["location"]).lower() == user_loc.lower() else 0.0
         exp_match = _experience_match(user_years, str(j.get("seniority", ""))) if j is not None else 0.0
-        sal_align = _salary_alignment(user_years, float(j.get("salary_min", 0) or 0),
-                                      float(j.get("salary_max", 0) or 0)) if j is not None else 0.0
+        if j is not None:
+            jf = ({"category": str(j.get("category", "")),
+                   "seniority": str(j.get("seniority", "")),
+                   "location": str(j.get("location", "")),
+                   "skills": j_skills} if salary_model is not None else None)
+            sal_align = _salary_alignment(
+                user_years, float(j.get("salary_min", 0) or 0),
+                float(j.get("salary_max", 0) or 0),
+                salary_model=salary_model, job_features=jf,
+            )
+        else:
+            sal_align = 0.0
         posted = float(j.get("posted_days_ago", 0) or 0) if j is not None else 0.0
         cat = str(j.get("category", "")) if j is not None else ""
         apply_rate = (user_cat_apply_rates or {}).get((int(user_id), cat), 0.0)
@@ -122,6 +153,8 @@ def build_ranking_features(
         s_uj = float(signals.s_user_to_job[i]) if signals.s_user_to_job is not None else 0.0
         s_ju = float(signals.s_job_to_user[i]) if signals.s_job_to_user is not None else 0.0
         bilat = float(signals.bilateral[i]) if signals.bilateral is not None else 0.0
+        hyb = float(signals.hybrid[i]) if signals.hybrid is not None else 0.0
+        b4r = float(signals.bert4rec[i]) if signals.bert4rec is not None else 0.0
 
         feats[i] = [
             float(signals.two_tower[i]),
@@ -136,5 +169,6 @@ def build_ranking_features(
             posted,
             float(apply_rate),
             s_uj, s_ju, bilat,
+            hyb, b4r,
         ]
     return feats

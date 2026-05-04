@@ -31,12 +31,17 @@ class LTRConfig:
 # RankingSignals leaves those fields None and downstream feature-builders treat them
 # as zero, keeping the LTR feature vector dimensionality stable.
 class SignalProvider:
-    def __init__(self, two_tower, content, collab, popularity, bilateral=None):
+    def __init__(self, two_tower, content, collab, popularity, bilateral=None,
+                 hybrid=None, bert4rec=None, salary=None, user_history=None):
         self.two_tower = two_tower      # TwoTowerTrainer or None
         self.content = content          # ContentBasedRecommender or None
         self.collab = collab            # CollaborativeRecommender or None
         self.popularity = popularity    # PopularityRecommender or None
         self.bilateral = bilateral      # BilateralScorer or None
+        self.hybrid = hybrid            # HybridRecommender or None — used as a feature, not a ranker
+        self.bert4rec = bert4rec        # BERT4RecTrainer or None — sequence-model score
+        self.salary = salary            # SalaryPredictor or None — soft salary alignment feature
+        self.user_history = user_history or {}   # {user_id: [job_id, ...]} for BERT4Rec
         # Pre-compute id→row dicts for two-tower id lookups; replaces per-call np.where scans.
         if two_tower is not None:
             art = two_tower.artifacts
@@ -52,14 +57,41 @@ class SignalProvider:
         ct = self.content.score_pairs(user_id, candidate_job_ids) if (self.content is not None and user_id in self.content._user_index) \
             else np.zeros(n, dtype=np.float32)
         cf = self.collab.score_pairs(user_id, candidate_job_ids) if self.collab is not None \
-            else np.full(n, 3.0, dtype=np.float32)
+            else np.zeros(n, dtype=np.float32)
         pop = self.popularity.score_pairs(candidate_job_ids) if self.popularity is not None \
             else np.zeros(n, dtype=np.float32)
         s_uj = s_ju = bilat = None
         if self.bilateral is not None:
             s_uj, s_ju, bilat = self.bilateral.score(user_id, candidate_job_ids)
+        hyb = self._hybrid_scores(user_id, candidate_job_ids) if self.hybrid is not None else None
+        b4r = self._bert4rec_scores(user_id, candidate_job_ids) if self.bert4rec is not None else None
         return RankingSignals(two_tower=tt, content=ct, collab=cf, popularity=pop,
-                              s_user_to_job=s_uj, s_job_to_user=s_ju, bilateral=bilat)
+                              s_user_to_job=s_uj, s_job_to_user=s_ju, bilateral=bilat,
+                              hybrid=hyb, bert4rec=b4r)
+
+    # Hybrid combiner score per candidate. We score against all jobs once and gather
+    # the requested subset — recommend(k=∞) returns score_map for the full corpus.
+    def _hybrid_scores(self, user_id: int, candidate_job_ids: list[int]) -> np.ndarray:
+        try:
+            full = self.hybrid.recommend(user_id, k=10**9, exclude_seen=False)
+        except Exception:
+            return np.zeros(len(candidate_job_ids), dtype=np.float32)
+        score_map = {int(j): float(s) for j, s in full}
+        return np.array([score_map.get(int(j), 0.0) for j in candidate_job_ids],
+                        dtype=np.float32)
+
+    # BERT4Rec next-item score over the user's interaction history. Items not in
+    # the model's known vocabulary score 0. Score scale is logit-space — fine for
+    # a tree booster which is scale-invariant per feature.
+    def _bert4rec_scores(self, user_id: int, candidate_job_ids: list[int]) -> np.ndarray:
+        history = self.user_history.get(int(user_id), [])
+        try:
+            top = self.bert4rec.recommend(history, k=10**9, exclude_seen=False)
+        except Exception:
+            return np.zeros(len(candidate_job_ids), dtype=np.float32)
+        score_map = {int(j): float(s) for j, s in top}
+        return np.array([score_map.get(int(j), 0.0) for j in candidate_job_ids],
+                        dtype=np.float32)
 
     def _two_tower_scores(self, user_id: int, candidate_job_ids: list[int]) -> np.ndarray:
         u_row = self._u_id_to_row.get(int(user_id), -1)
@@ -138,7 +170,8 @@ class LTRRanker:
             ])
             sigs = self.signals.compute(int(uid), cand.tolist())
             feats = build_ranking_features(int(uid), cand.tolist(), users, jobs,
-                                           sigs, self._apply_rates)
+                                           sigs, self._apply_rates,
+                                           salary_model=self.signals.salary)
             X_parts.append(feats)
             y_parts.append(labels)
             group_sizes.append(len(cand))
@@ -168,7 +201,9 @@ class LTRRanker:
         if self.booster is None or not candidate_job_ids:
             return [(int(j), 0.0) for j in candidate_job_ids]
         sigs = self.signals.compute(int(user_id), candidate_job_ids)
-        feats = build_ranking_features(int(user_id), candidate_job_ids, self._users, self._jobs, sigs, self._apply_rates)
+        feats = build_ranking_features(int(user_id), candidate_job_ids, self._users,
+                                       self._jobs, sigs, self._apply_rates,
+                                       salary_model=self.signals.salary)
         d = xgb.DMatrix(feats, feature_names=FEATURE_NAMES)
         scores = self.booster.predict(d)
         order = np.argsort(-scores)

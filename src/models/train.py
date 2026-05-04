@@ -33,9 +33,6 @@ from src.models.reciprocal import JobToUserTower, BilateralScorer, ReciprocalCon
 from src.models.ltr_ranker import LTRRanker, LTRConfig, SignalProvider
 from src.retrieval.faiss_index import FaissJobIndex
 from src.models.bert4rec import BERT4RecTrainer, BERT4RecConfig
-from src.models.deepfm import DeepFMRecommender, DeepFMConfig
-from src.models.lightgcn import LightGCNRecommender, LightGCNConfig
-from src.models.mult_vae import MultVAERecommender, MultVAEConfig
 from src.models.salary_predictor import SalaryPredictor
 from src.models.career_path import CareerPathPredictor
 from src.ontology.skill_ontology import SkillOntology
@@ -103,9 +100,22 @@ def fit_reciprocal(cfg: Settings, data: ProcessedData, two_tower: TwoTowerTraine
 
 
 def fit_ltr(cfg: Settings, data: ProcessedData, content, collab, popularity, two_tower,
-            bilateral: BilateralScorer | None = None) -> LTRRanker:
+            bilateral: BilateralScorer | None = None, hybrid=None, bert4rec=None,
+            salary=None) -> LTRRanker:
+    # User interaction history (chronological, oldest→newest) for BERT4Rec scoring.
+    sort_col = "timestamp_days_ago" if "timestamp_days_ago" in data.train.columns else None
+    user_history: dict[int, list[int]] = {}
+    if sort_col is not None:
+        for uid, g in data.train.groupby("user_id"):
+            ordered = g.sort_values(sort_col, ascending=False)  # large=old → small=new
+            user_history[int(uid)] = [int(j) for j in ordered["job_id"].tolist()]
+    else:
+        for uid, g in data.train.groupby("user_id"):
+            user_history[int(uid)] = [int(j) for j in g["job_id"].tolist()]
     sp = SignalProvider(two_tower=two_tower, content=content, collab=collab,
-                        popularity=popularity, bilateral=bilateral)
+                        popularity=popularity, bilateral=bilateral,
+                        hybrid=hybrid, bert4rec=bert4rec, salary=salary,
+                        user_history=user_history)
     lcfg = cfg.models["ltr"]
     ltr = LTRRanker(LTRConfig(
         objective=lcfg["objective"], n_estimators=lcfg["n_estimators"],
@@ -117,12 +127,10 @@ def fit_ltr(cfg: Settings, data: ProcessedData, content, collab, popularity, two
 
 
 def fit_tier2(cfg: Settings, data: ProcessedData) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    out["bert4rec"] = BERT4RecTrainer(BERT4RecConfig()).fit(data.train)
-    out["deepfm"] = DeepFMRecommender(DeepFMConfig()).fit(data.users, data.jobs, data.train)
-    out["lightgcn"] = LightGCNRecommender(LightGCNConfig()).fit(data.users, data.jobs, data.train)
-    out["mult_vae"] = MultVAERecommender(MultVAEConfig()).fit(data.users, data.jobs, data.train)
-    return out
+    """Trim: only BERT4Rec survives. DeepFM/LightGCN/Mult-VAE were trained but never
+    consumed downstream — academic theatre. The single sequence model now feeds LTR
+    as a feature (LiRank KDD 2024 ships exactly one sequence model + GBDT)."""
+    return {"bert4rec": BERT4RecTrainer(BERT4RecConfig()).fit(data.train)}
 
 
 def fit_tier3(cfg: Settings, data: ProcessedData) -> dict[str, Any]:
@@ -195,9 +203,12 @@ def run(cfg: Settings, include_tier2: bool = False) -> dict[str, Any]:
         content, collab, popularity, hybrid = fit_classical(cfg, data, embedder)
         two_tower, faiss_idx = fit_neural_retrieval(cfg, data, embedder)
         bilateral = fit_reciprocal(cfg, data, two_tower)
-        ltr = fit_ltr(cfg, data, content, collab, popularity, two_tower, bilateral)
+        # Tier 2 (BERT4Rec) and tier 3 (salary) train first so LTR can consume them.
         tier2 = fit_tier2(cfg, data) if include_tier2 else None
         tier3 = fit_tier3(cfg, data)
+        ltr = fit_ltr(cfg, data, content, collab, popularity, two_tower, bilateral,
+                      hybrid=hybrid, bert4rec=(tier2 or {}).get("bert4rec"),
+                      salary=(tier3 or {}).get("salary"))
         save_artifacts(cfg, data=data, content=content, collab=collab, popularity=popularity,
                        hybrid=hybrid, two_tower=two_tower, faiss_idx=faiss_idx, ltr=ltr,
                        bilateral=bilateral, tier2=tier2, tier3=tier3)
