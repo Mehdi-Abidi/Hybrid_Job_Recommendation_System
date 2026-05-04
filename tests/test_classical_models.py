@@ -76,12 +76,13 @@ def test_content_similar_jobs(content_model, processed):
     assert all(j != jid for j, _ in recs)
 
 
-# Collaborative SVD fits and predicts in the rating scale.
+# iALS fits and produces finite factor dot products (unbounded — implicit feedback).
 def test_collaborative_fit_and_predict(processed):
     cf = CollaborativeRecommender(n_factors=8, n_epochs=3).fit(
         processed.train, processed.jobs["job_id"].to_numpy())
     p = cf.predict(int(processed.train["user_id"].iloc[0]), int(processed.train["job_id"].iloc[0]))
-    assert 1.0 <= p <= 5.0
+    import math
+    assert math.isfinite(p)
     assert cf.knows_user(int(processed.train["user_id"].iloc[0]))
 
 

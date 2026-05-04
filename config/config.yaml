@@ -31,10 +31,10 @@ models:
     embedding_model: all-MiniLM-L6-v2
     embedding_dim: 384
   collaborative:
-    n_factors: 100
+    n_factors: 64
     n_epochs: 20
-    lr: 0.005
-    reg: 0.02
+    reg: 0.01
+    alpha: 40.0  # iALS confidence scaling for implicit feedback (Hu/Koren/Volinsky 2008)
   popularity:
     recency_halflife_days: 30
   hybrid:

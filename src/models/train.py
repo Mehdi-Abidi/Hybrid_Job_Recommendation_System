@@ -61,7 +61,7 @@ def fit_classical(cfg: Settings, data: ProcessedData, embedder: EmbeddingFeaturi
     collab_cfg = mb["collaborative"]
     collab = CollaborativeRecommender(
         n_factors=collab_cfg["n_factors"], n_epochs=collab_cfg["n_epochs"],
-        lr=collab_cfg["lr"], reg=collab_cfg["reg"],
+        reg=collab_cfg["reg"], alpha=collab_cfg.get("alpha", 40.0),
     ).fit(data.train, data.jobs["job_id"].to_numpy(), all_user_ids=data.users["user_id"].to_numpy())
     pop = PopularityRecommender(recency_halflife_days=mb["popularity"]["recency_halflife_days"]).fit(
         data.train, data.jobs)
