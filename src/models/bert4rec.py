@@ -145,6 +145,27 @@ class BERT4RecTrainer:
             log.info("BERT4Rec ep %d/%d loss=%.4f", ep + 1, self.cfg.epochs, total / max(n, 1))
         return self
 
+    # Logit score per candidate job given user history. Used as a feature in LTR —
+    # cheaper than `recommend(k=∞)` because we gather only |cands| logits, not the
+    # full vocab. Items unknown to the trained vocab return 0.
+    @torch.no_grad()
+    def score_pairs(self, history: list[int], candidate_job_ids: list[int]) -> np.ndarray:
+        if self.model is None or not self._item_to_token:
+            return np.zeros(len(candidate_job_ids), dtype=np.float32)
+        self.model.eval()
+        device = next(self.model.parameters()).device
+        tokens = [self._item_to_token[int(j)] for j in history if int(j) in self._item_to_token]
+        tokens = tokens[-(self.cfg.max_len - 1):] + [MASK_ID]
+        seq = [PAD_ID] * (self.cfg.max_len - len(tokens)) + tokens
+        x = torch.tensor([seq], dtype=torch.long, device=device)
+        logits = self.model(x)[0, -1].cpu().numpy()  # (vocab,)
+        out = np.zeros(len(candidate_job_ids), dtype=np.float32)
+        for i, jid in enumerate(candidate_job_ids):
+            tok = self._item_to_token.get(int(jid))
+            if tok is not None:
+                out[i] = float(logits[tok])
+        return out
+
     # Predict next items for a user given their interaction history.
     @torch.no_grad()
     def recommend(self, history: list[int], k: int = 10, exclude_seen: bool = True) -> list[tuple[int, float]]:

@@ -9,10 +9,11 @@ import pandas as pd
 from src.features.structured_features import parse_skills
 
 
-# Ordered feature names — keep stable so saved boosters match feature vectors.
-# Bilateral features are appended at the end so legacy boosters (without them) can
-# still be loaded by trimming the trailing columns; the SignalProvider zero-fills
-# them when no reciprocal model is wired in.
+# Ordered feature names — must match the booster's training vector.
+# This list grew during the overhaul (added bilateral, hybrid, bert4rec). Pre-overhaul
+# saved boosters are NOT compatible with this schema and must be retrained. The
+# SignalProvider zero-fills any signal whose source model isn't wired in, so a
+# minimally-equipped run still produces a valid 16-column feature vector.
 FEATURE_NAMES: list[str] = [
     "two_tower_score",
     "content_score",
@@ -102,6 +103,9 @@ def user_category_apply_rates(train: pd.DataFrame, jobs: pd.DataFrame,
 
 
 # Build the (n_pairs, n_features) matrix for a list of user-job candidates.
+# `jobs` may be passed either as the raw frame or pre-indexed by job_id — accepting
+# both lets hot-path callers (LTR fit) hoist the set_index call out of the per-user
+# loop, saving ~120ms × n_users on the real-scale dataset (~5 min for 2,484 users).
 def build_ranking_features(
     user_id: int, candidate_job_ids: list[int],
     users: pd.DataFrame, jobs: pd.DataFrame,
@@ -119,7 +123,7 @@ def build_ranking_features(
         user_skills = str(user_row.iloc[0].get("skills", ""))
         user_loc = str(user_row.iloc[0].get("preferred_location", ""))
 
-    job_by_id = jobs.set_index("job_id")
+    job_by_id = jobs if jobs.index.name == "job_id" else jobs.set_index("job_id")
     n = len(candidate_job_ids)
     feats = np.zeros((n, len(FEATURE_NAMES)), dtype=np.float32)
 

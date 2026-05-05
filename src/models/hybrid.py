@@ -62,22 +62,36 @@ class HybridRecommender:
 
     def recommend(self, user_id: int, k: int = 10, exclude_seen: bool = True) -> list[tuple[int, float]]:
         assert self._jobs is not None
-        tier = self._tier(user_id)
-        w = self.cfg.weights[tier]
         job_ids = self._jobs["job_id"].to_numpy()
-
-        content_s = self.content.score_pairs(user_id, list(job_ids)) if user_id in self.content._user_index \
-            else self._content_cold_score(user_id, job_ids)
-        collab_s = self.collab.score_pairs(user_id, list(job_ids)) if self.collab.knows_user(user_id) \
-            else np.full(len(job_ids), self.collab.global_mean, dtype=np.float32)
-        pop_s = self.popularity.score_pairs(list(job_ids))
-
-        final = (w["content"] * _minmax(content_s)
-                 + w["collab"] * _minmax(collab_s)
-                 + w["popularity"] * _minmax(pop_s))
-
+        final = self._combined_score(user_id, list(job_ids))
         exclude = self._user_history.get(int(user_id), set()) if exclude_seen else set()
         return self._top_k(job_ids, final, k, exclude)
+
+    # Score a candidate subset only — used by LTR's SignalProvider as a feature.
+    # Returns the same per-tier weighted combination as `recommend` but on |cands|
+    # jobs rather than the full corpus, so SignalProvider doesn't pay O(|all_jobs|)
+    # per user during LTR fit.
+    def score_pairs(self, user_id: int, job_ids: list[int]) -> np.ndarray:
+        return self._combined_score(user_id, job_ids)
+
+    # Internal: compute the tier-weighted score over an arbitrary job_id list.
+    def _combined_score(self, user_id: int, job_ids: list[int]) -> np.ndarray:
+        tier = self._tier(user_id)
+        w = self.cfg.weights[tier]
+        n = len(job_ids)
+        # Cold path's content score requires the user's resume; otherwise score_pairs.
+        if user_id in self.content._user_index:
+            content_s = self.content.score_pairs(user_id, job_ids)
+        else:
+            content_s = self._content_cold_score(user_id, np.asarray(job_ids))
+        if self.collab.knows_user(user_id):
+            collab_s = self.collab.score_pairs(user_id, job_ids)
+        else:
+            collab_s = np.full(n, self.collab.global_mean, dtype=np.float32)
+        pop_s = self.popularity.score_pairs(job_ids)
+        return (w["content"] * _minmax(content_s)
+                + w["collab"] * _minmax(collab_s)
+                + w["popularity"] * _minmax(pop_s))
 
     # Score a brand-new user with only resume+skills (no interactions).
     def recommend_for_new_user(self, resume: str, skills: str, k: int = 10) -> list[tuple[int, float]]:

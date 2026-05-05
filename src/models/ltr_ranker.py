@@ -77,29 +77,27 @@ class SignalProvider:
                               s_user_to_job=s_uj, s_job_to_user=s_ju, bilateral=bilat,
                               hybrid=hyb, bert4rec=b4r)
 
-    # Hybrid combiner score per candidate. We score against all jobs once and gather
-    # the requested subset — recommend(k=∞) returns score_map for the full corpus.
+    # Hybrid combiner score per candidate, computed only over the requested subset
+    # (~candidate count, typically 50-500) instead of the full corpus (~123k). Saves
+    # ~30-90 min on the real-data LTR fit.
     def _hybrid_scores(self, user_id: int, candidate_job_ids: list[int]) -> np.ndarray:
         try:
-            full = self.hybrid.recommend(user_id, k=10**9, exclude_seen=False)
+            return np.asarray(
+                self.hybrid.score_pairs(int(user_id), [int(j) for j in candidate_job_ids]),
+                dtype=np.float32,
+            )
         except Exception:
             return np.zeros(len(candidate_job_ids), dtype=np.float32)
-        score_map = {int(j): float(s) for j, s in full}
-        return np.array([score_map.get(int(j), 0.0) for j in candidate_job_ids],
-                        dtype=np.float32)
 
-    # BERT4Rec next-item score over the user's interaction history. Items not in
-    # the model's known vocabulary score 0. Score scale is logit-space — fine for
-    # a tree booster which is scale-invariant per feature.
+    # BERT4Rec next-item score over the user's interaction history, gathered only
+    # over the candidate set (logit-space — fine for a tree booster). Items unknown
+    # to the trained vocabulary score 0.
     def _bert4rec_scores(self, user_id: int, candidate_job_ids: list[int]) -> np.ndarray:
         history = self.user_history.get(int(user_id), [])
         try:
-            top = self.bert4rec.recommend(history, k=10**9, exclude_seen=False)
+            return self.bert4rec.score_pairs(history, [int(j) for j in candidate_job_ids])
         except Exception:
             return np.zeros(len(candidate_job_ids), dtype=np.float32)
-        score_map = {int(j): float(s) for j, s in top}
-        return np.array([score_map.get(int(j), 0.0) for j in candidate_job_ids],
-                        dtype=np.float32)
 
     def _two_tower_scores(self, user_id: int, candidate_job_ids: list[int]) -> np.ndarray:
         u_row = self._u_id_to_row.get(int(user_id), -1)
@@ -145,6 +143,8 @@ class LTRRanker:
              for c in jobs["category"].dropna().unique()}
             if has_cat else {}
         )
+        # Pre-index once instead of per-call inside build_ranking_features.
+        jobs_indexed = jobs.set_index("job_id")
 
         X_parts, y_parts, group_sizes = [], [], []
         for uid, g in train.sort_values("user_id").groupby("user_id", sort=False):
@@ -176,7 +176,7 @@ class LTRRanker:
                 np.zeros(len(neg_random) + len(hard), dtype=np.float32),
             ])
             sigs = self.signals.compute(int(uid), cand.tolist())
-            feats = build_ranking_features(int(uid), cand.tolist(), users, jobs,
+            feats = build_ranking_features(int(uid), cand.tolist(), users, jobs_indexed,
                                            sigs, self._apply_rates,
                                            salary_model=self.signals.salary)
             X_parts.append(feats)
@@ -187,7 +187,10 @@ class LTRRanker:
         return X, y, np.array(group_sizes, dtype=np.int64)
 
     def fit(self, users: pd.DataFrame, jobs: pd.DataFrame, train: pd.DataFrame) -> "LTRRanker":
-        self._jobs, self._users = jobs, users
+        # Cache the job_id-indexed frame for rank()'s hot path — same hoist as inside
+        # _build_training_matrix, but reused at inference too.
+        self._jobs = jobs.set_index("job_id") if jobs.index.name != "job_id" else jobs
+        self._users = users
         X, y, groups = self._build_training_matrix(users, jobs, train)
         if len(groups) == 0 or X.shape[0] == 0:
             log.warning("LTR: no training pairs; booster not fit.")

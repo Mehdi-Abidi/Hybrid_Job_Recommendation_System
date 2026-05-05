@@ -124,19 +124,25 @@ class JobToUserTower:
 
     # Recruiter-side dot products for one user against many jobs. Returns raw scores
     # (pre-sigmoid). Unknown ids -> 0.0, mirroring the forward tower's policy.
+    # Cache full embedding matrices on first call so repeated callers don't re-run
+    # full-corpus forward passes (BilateralScorer caches separately, but direct
+    # callers of this method also need the same fix — Task 17 review item).
     def score_pairs(self, user_id: int, job_ids: list[int]) -> np.ndarray:
         if self.model is None:
             return np.zeros(len(job_ids), dtype=np.float32)
         u_row = self._user_id_to_row.get(int(user_id), -1)
         if u_row < 0:
             return np.zeros(len(job_ids), dtype=np.float32)
-        u_emb = self.user_embeddings()[u_row]
-        j_emb = self.job_embeddings()
+        if not hasattr(self, "_cached_u_emb"):
+            self._cached_u_emb = self.user_embeddings()
+            self._cached_j_emb = self.job_embeddings()
+        j_idx = np.fromiter(
+            (self._job_id_to_row.get(int(j), -1) for j in job_ids),
+            dtype=np.int64, count=len(job_ids),
+        )
         out = np.zeros(len(job_ids), dtype=np.float32)
-        for i, jid in enumerate(job_ids):
-            j_row = self._job_id_to_row.get(int(jid), -1)
-            if j_row >= 0:
-                out[i] = float(j_emb[j_row] @ u_emb)
+        valid = j_idx >= 0
+        out[valid] = self._cached_j_emb[j_idx[valid]] @ self._cached_u_emb[u_row]
         return out
 
     def save(self, path: Path) -> None:
