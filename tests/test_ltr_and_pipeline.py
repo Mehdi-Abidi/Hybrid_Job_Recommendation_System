@@ -98,7 +98,7 @@ def test_ltr_feature_importance(processed, classical_models, trained_tt):
 
 # LLM re-ranker falls back to pass-through when no client is available.
 def test_llm_rerank_fallback_no_client():
-    llm = LLMReranker(LLMConfig(output_top_n=2), api_key=None, client=None)
+    llm = LLMReranker(LLMConfig(output_top_n=2), api_keys=[], client=None)
     cands = [{"job_id": 1, "prior_score": 0.9, "title": "a"},
              {"job_id": 2, "prior_score": 0.5, "title": "b"}]
     out = llm.rerank({"user_id": 0, "skills": "python"}, cands, n=2)

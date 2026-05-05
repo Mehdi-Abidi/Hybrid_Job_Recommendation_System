@@ -170,14 +170,21 @@ def save_artifacts(cfg: Settings, *, data: ProcessedData,
 
 def evaluate_all(cfg: Settings, data: ProcessedData, content, collab, popularity, hybrid,
                  *, two_tower=None, faiss_idx=None, ltr=None, bilateral=None,
+                 eval_with_llm: bool = False,
                  debug_per_model: bool = True) -> pd.DataFrame:
-    """Evaluate the production cascade (FAISS → bilateral → LTR → MMR) — the only
-    metric that actually reflects what we ship. Per-model rows kept for debugging
-    so we can see individual stage contributions.
+    """Evaluate the production cascade (FAISS → bilateral → LTR → MMR [→ LLM]) — the
+    only metric that actually reflects what we ship. Per-model rows kept for
+    debugging so we can see individual stage contributions.
 
     With binary implicit feedback, every test interaction is a positive
-    (positive_rating_threshold=1)."""
+    (positive_rating_threshold=1).
+
+    `eval_with_llm`: when True, the production cascade includes the Groq LLM rerank
+    step — the same pipeline served at inference. Off by default for fast/cheap
+    eval. Requires GROQ_API_KEY[_2,_3] in env.
+    """
     from src.pipeline.multi_stage import MultiStagePipeline, PipelineStages
+    from src.models.llm_reranker import LLMReranker, LLMConfig
     user_history_set = data.train.groupby("user_id")["job_id"].apply(
         lambda s: {int(j) for j in s}).to_dict()
     ev = Evaluator(data.test, k_values=cfg.evaluation["k_values"], jobs=data.jobs,
@@ -185,9 +192,16 @@ def evaluate_all(cfg: Settings, data: ProcessedData, content, collab, popularity
     models: dict[str, Any] = {}
     # Production cascade — only available once the full stack is fit.
     if two_tower is not None and faiss_idx is not None and ltr is not None:
+        llm_cfg = cfg.models.get("llm", {})
+        llm = LLMReranker(LLMConfig(
+            model=llm_cfg.get("model", "llama-3.1-8b-instant"),
+            rerank_top_k=llm_cfg.get("rerank_top_k", 20),
+            output_top_n=llm_cfg.get("output_top_n", 10),
+            max_tokens=llm_cfg.get("max_tokens", 4096),
+        )) if eval_with_llm else None
         pipe = MultiStagePipeline(
             PipelineStages(two_tower=two_tower, faiss=faiss_idx, content=content,
-                           collab=collab, popularity=popularity, ltr=ltr, llm=None,
+                           collab=collab, popularity=popularity, ltr=ltr, llm=llm,
                            bilateral=bilateral),
             users=data.users, jobs=data.jobs, user_history=user_history_set,
             n_retrieve=500, n_rank=20, n_final=10,
@@ -205,7 +219,7 @@ def evaluate_all(cfg: Settings, data: ProcessedData, content, collab, popularity
     return ev.compare_models(models)
 
 
-def run(cfg: Settings, include_tier2: bool = False) -> dict[str, Any]:
+def run(cfg: Settings, include_tier2: bool = True, eval_with_llm: bool = False) -> dict[str, Any]:
     with tracking.run("rs-overhaul", run_name="full-train"):
         tracking.log_params({
             "split_strategy": cfg.split.strategy,
@@ -219,6 +233,7 @@ def run(cfg: Settings, include_tier2: bool = False) -> dict[str, Any]:
             "ltr_objective": cfg.models["ltr"]["objective"],
             "ltr_n_estimators": cfg.models["ltr"]["n_estimators"],
             "include_tier2": include_tier2,
+            "eval_with_llm": eval_with_llm,
             "data_source": cfg.data.source,
         })
         data = DataPreprocessor(cfg).run(persist=True)
@@ -260,7 +275,7 @@ def run(cfg: Settings, include_tier2: bool = False) -> dict[str, Any]:
                        bilateral=bilateral, tier2=tier2, tier3=tier3)
         report = evaluate_all(cfg, data, content, collab, popularity, hybrid,
                               two_tower=two_tower, faiss_idx=faiss_idx, ltr=ltr,
-                              bilateral=bilateral)
+                              bilateral=bilateral, eval_with_llm=eval_with_llm)
         log.info("Evaluation:\n%s", report.to_string(index=False))
         # Per-model headline metrics into MLflow
         for _, row in report.iterrows():
@@ -281,10 +296,14 @@ def run(cfg: Settings, include_tier2: bool = False) -> dict[str, Any]:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--include-tier2", action="store_true", help="Also fit BERT4Rec/DeepFM/LightGCN/Mult-VAE.")
+    ap.add_argument("--no-tier2", action="store_true",
+                    help="Skip BERT4Rec sequence model (faster but loses one LTR feature).")
+    ap.add_argument("--eval-with-llm", action="store_true",
+                    help="Include the Groq LLM rerank step in the production-cascade eval. "
+                         "Requires GROQ_API_KEY[_2,_3] in env. Slower/costs API quota.")
     args = ap.parse_args()
     cfg = load_settings()
-    run(cfg, include_tier2=args.include_tier2)
+    run(cfg, include_tier2=not args.no_tier2, eval_with_llm=args.eval_with_llm)
 
 
 if __name__ == "__main__":

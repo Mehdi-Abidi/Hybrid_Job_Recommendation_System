@@ -12,17 +12,13 @@ import os
 import re
 from typing import Any
 
+from src.models.llm_reranker import _GroqKeyRotator, _is_rotatable_error, DEFAULT_MODEL
 from src.ontology.skill_ontology import SkillOntology
 from src.utils.logging import get_logger
 
 log = get_logger(__name__)
 
 SENIORITIES = ["junior", "mid", "senior", "staff", "principal", "lead"]
-
-AZURE_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
-AZURE_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "")
-AZURE_API_VERSION = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01")
-AZURE_DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
 
 SYSTEM_PROMPT = (
     "You parse free-form job-search queries into structured filters. "
@@ -48,24 +44,34 @@ class ParsedQuery:
 
 
 class QueryUnderstanding:
-    def __init__(self, ontology: SkillOntology | None = None, api_key: str | None = None,
-                 client: Any = None, model: str = AZURE_DEPLOYMENT):
+    def __init__(self, ontology: SkillOntology | None = None,
+                 api_keys: list[str] | None = None, client: Any = None,
+                 model: str = DEFAULT_MODEL):
         self.ontology = ontology
-        self._client = client
-        self._api_key = api_key or os.environ.get("AZURE_OPENAI_API_KEY") or AZURE_API_KEY
         self.model = model
+        if client is not None:
+            self._rotator = None
+            self._injected_client = client
+        else:
+            from src.models.llm_reranker import _collect_groq_keys
+            self._rotator = _GroqKeyRotator(api_keys if api_keys is not None
+                                            else _collect_groq_keys())
+            self._injected_client = None
 
     def parse(self, query: str) -> ParsedQuery:
-        client = self._get_client()
+        client = self._client()
         if client is None:
             return self._regex_parse(query)
-        try:
-            msg = client.chat.completions.create(
+
+        def _call(c):
+            return c.chat.completions.create(
                 model=self.model, max_tokens=512,
                 messages=[{"role": "system", "content": SYSTEM_PROMPT},
                           {"role": "user", "content": f"Parse: {query}"}],
                 response_format={"type": "json_object"},
             )
+        try:
+            msg = self._try_with_rotation(_call)
             text = msg.choices[0].message.content or ""
             obj = self._parse_json(text)
             return ParsedQuery(
@@ -78,21 +84,32 @@ class QueryUnderstanding:
             log.warning("LLM query parse failed (%s); using regex fallback.", e)
             return self._regex_parse(query)
 
-    def _get_client(self):
-        if self._client is not None:
-            return self._client
-        if not self._api_key:
-            return None
-        try:
-            from openai import AzureOpenAI
-            self._client = AzureOpenAI(
-                azure_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT", AZURE_ENDPOINT),
-                api_key=self._api_key,
-                api_version=os.environ.get("AZURE_OPENAI_API_VERSION", AZURE_API_VERSION),
-            )
-            return self._client
-        except Exception:
-            return None
+    def _client(self):
+        if self._injected_client is not None:
+            return self._injected_client
+        return self._rotator.current() if self._rotator else None
+
+    def _try_with_rotation(self, call):
+        if self._injected_client is not None:
+            return call(self._injected_client)
+        if self._rotator is None or not self._rotator.has_keys():
+            raise RuntimeError("no Groq keys configured")
+        attempts = max(len(self._rotator.keys), 1)
+        last_exc: Exception | None = None
+        for _ in range(attempts):
+            c = self._rotator.current()
+            if c is None:
+                if not self._rotator.rotate():
+                    break
+                continue
+            try:
+                return call(c)
+            except Exception as e:
+                last_exc = e
+                if _is_rotatable_error(e, (401, 403, 429)) and self._rotator.rotate():
+                    continue
+                raise
+        raise last_exc if last_exc is not None else RuntimeError("Groq rotation exhausted")
 
     def _regex_parse(self, query: str) -> ParsedQuery:
         q = query.lower()

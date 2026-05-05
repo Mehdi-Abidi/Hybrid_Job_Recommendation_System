@@ -100,7 +100,7 @@ def test_skill_gap():
 
 # Query understanding regex fallback extracts seniority, location, min salary.
 def test_query_understanding_regex_fallback():
-    q = QueryUnderstanding(ontology=SkillOntology(), api_key=None, client=None)
+    q = QueryUnderstanding(ontology=SkillOntology(), api_keys=[], client=None)
     parsed = q.parse("senior python backend role in NYC that pays at least 180k, remote")
     assert parsed.seniority == "senior"
     assert "python" in parsed.skills
