@@ -61,10 +61,13 @@ class CategoricalEncoder:
         return len(self.classes_)
 
 
-# Bucket years of experience into seniority bins.
+# Bucket years of experience into seniority bins. Out-of-range / NaN values clamp
+# to the last bucket so real-world data with garbage values (negative, >100, missing)
+# never produces NaN that breaks the int cast downstream.
 def bin_experience(years: pd.Series) -> np.ndarray:
-    bins = [-1, 1, 3, 6, 10, 100]  # junior: 0-1, mid: 2-3, senior: 4-6, staff: 7-10, principal: 11+
-    return pd.cut(years, bins=bins, labels=False).astype(np.int64).to_numpy()
+    bins = [-np.inf, 1, 3, 6, 10, np.inf]  # junior: 0-1, mid: 2-3, senior: 4-6, staff: 7-10, principal: 11+
+    binned = pd.cut(years, bins=bins, labels=False, include_lowest=True)
+    return binned.fillna(0).astype(np.int64).to_numpy()
 
 
 class HashBucketEncoder:
