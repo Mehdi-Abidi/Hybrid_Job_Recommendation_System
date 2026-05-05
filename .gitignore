@@ -15,6 +15,7 @@ venv/
 # Data + artifacts
 data/raw/*
 data/processed/*
+data/smoke/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 models_artifacts/*
