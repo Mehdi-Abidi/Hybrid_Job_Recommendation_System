@@ -171,6 +171,7 @@ def save_artifacts(cfg: Settings, *, data: ProcessedData,
 def evaluate_all(cfg: Settings, data: ProcessedData, content, collab, popularity, hybrid,
                  *, two_tower=None, faiss_idx=None, ltr=None, bilateral=None,
                  eval_with_llm: bool = False,
+                 eval_llm_sample: int = 200,
                  debug_per_model: bool = True) -> pd.DataFrame:
     """Evaluate the production cascade (FAISS → bilateral → LTR → MMR [→ LLM]) — the
     only metric that actually reflects what we ship. Per-model rows kept for
@@ -189,37 +190,78 @@ def evaluate_all(cfg: Settings, data: ProcessedData, content, collab, popularity
         lambda s: {int(j) for j in s}).to_dict()
     ev = Evaluator(data.test, k_values=cfg.evaluation["k_values"], jobs=data.jobs,
                    positive_rating_threshold=1)
-    models: dict[str, Any] = {}
+    rows: list[pd.DataFrame] = []
     # Production cascade — only available once the full stack is fit.
     if two_tower is not None and faiss_idx is not None and ltr is not None:
-        llm_cfg = cfg.models.get("llm", {})
-        llm = LLMReranker(LLMConfig(
-            model=llm_cfg.get("model", "llama-3.1-8b-instant"),
-            rerank_top_k=llm_cfg.get("rerank_top_k", 20),
-            output_top_n=llm_cfg.get("output_top_n", 10),
-            max_tokens=llm_cfg.get("max_tokens", 4096),
-        )) if eval_with_llm else None
-        pipe = MultiStagePipeline(
+        # Always evaluate the no-LLM cascade on the full test set — fast, free,
+        # gives the headline metric. The LLM rerank's job is per-query polish,
+        # not metric movement, and Groq's free-tier rate limit makes full-set
+        # LLM eval impractical (~28 min best case, regularly 429s out).
+        pipe_nollm = MultiStagePipeline(
             PipelineStages(two_tower=two_tower, faiss=faiss_idx, content=content,
-                           collab=collab, popularity=popularity, ltr=ltr, llm=llm,
+                           collab=collab, popularity=popularity, ltr=ltr, llm=None,
                            bilateral=bilateral),
             users=data.users, jobs=data.jobs, user_history=user_history_set,
             n_retrieve=500, n_rank=20, n_final=10,
         )
-        models["production"] = lambda u, k: [
-            (r.job_id, r.score) for r in pipe.recommend(u, exclude_seen=True)
-        ]
-    if debug_per_model:
-        models.update({
+        models_full: dict[str, Any] = {
+            "production": lambda u, k: [
+                (r.job_id, r.score) for r in pipe_nollm.recommend(u, exclude_seen=True)
+            ]
+        }
+        if debug_per_model:
+            models_full.update({
+                "content": lambda u, k: content.recommend(u, k) if u in content._user_index else [],
+                "collab": lambda u, k: collab.recommend(u, k),
+                "popularity": lambda u, k: popularity.recommend(k=k),
+                "hybrid": lambda u, k: [(j, s) for j, s in hybrid.recommend(u, k=k)],
+            })
+        rows.append(ev.compare_models(models_full))
+
+        # Optional LLM-augmented cascade — run on a sampled subset of test users
+        # to estimate the LLM rerank's NDCG impact without burning rate limits.
+        if eval_with_llm:
+            llm_cfg = cfg.models.get("llm", {})
+            llm = LLMReranker(LLMConfig(
+                model=llm_cfg.get("model", "llama-3.1-8b-instant"),
+                rerank_top_k=llm_cfg.get("rerank_top_k", 20),
+                output_top_n=llm_cfg.get("output_top_n", 10),
+                max_tokens=llm_cfg.get("max_tokens", 4096),
+            ))
+            pipe_llm = MultiStagePipeline(
+                PipelineStages(two_tower=two_tower, faiss=faiss_idx, content=content,
+                               collab=collab, popularity=popularity, ltr=ltr, llm=llm,
+                               bilateral=bilateral),
+                users=data.users, jobs=data.jobs, user_history=user_history_set,
+                n_retrieve=500, n_rank=20, n_final=10,
+            )
+            test_users = list(data.test["user_id"].unique())
+            rng = np.random.default_rng(cfg.split.seed)
+            sample = rng.choice(test_users,
+                                size=min(eval_llm_sample, len(test_users)),
+                                replace=False).tolist()
+            log.info("Evaluating LLM cascade on %d/%d sampled users",
+                     len(sample), len(test_users))
+            llm_models = {
+                "production_with_llm": lambda u, k: [
+                    (r.job_id, r.score) for r in pipe_llm.recommend(u, exclude_seen=True)
+                ],
+            }
+            rows.append(ev.compare_models(llm_models, user_ids=[int(u) for u in sample]))
+    elif debug_per_model:
+        # No production cascade — just per-model debug.
+        models = {
             "content": lambda u, k: content.recommend(u, k) if u in content._user_index else [],
             "collab": lambda u, k: collab.recommend(u, k),
             "popularity": lambda u, k: popularity.recommend(k=k),
             "hybrid": lambda u, k: [(j, s) for j, s in hybrid.recommend(u, k=k)],
-        })
-    return ev.compare_models(models)
+        }
+        rows.append(ev.compare_models(models))
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
 
-def run(cfg: Settings, include_tier2: bool = True, eval_with_llm: bool = False) -> dict[str, Any]:
+def run(cfg: Settings, include_tier2: bool = True, eval_with_llm: bool = False,
+        eval_llm_sample: int = 200) -> dict[str, Any]:
     with tracking.run("rs-overhaul", run_name="full-train"):
         tracking.log_params({
             "split_strategy": cfg.split.strategy,
@@ -275,7 +317,8 @@ def run(cfg: Settings, include_tier2: bool = True, eval_with_llm: bool = False) 
                        bilateral=bilateral, tier2=tier2, tier3=tier3)
         report = evaluate_all(cfg, data, content, collab, popularity, hybrid,
                               two_tower=two_tower, faiss_idx=faiss_idx, ltr=ltr,
-                              bilateral=bilateral, eval_with_llm=eval_with_llm)
+                              bilateral=bilateral, eval_with_llm=eval_with_llm,
+                              eval_llm_sample=eval_llm_sample)
         log.info("Evaluation:\n%s", report.to_string(index=False))
         # Per-model headline metrics into MLflow
         for _, row in report.iterrows():
@@ -299,11 +342,18 @@ def main():
     ap.add_argument("--no-tier2", action="store_true",
                     help="Skip BERT4Rec sequence model (faster but loses one LTR feature).")
     ap.add_argument("--eval-with-llm", action="store_true",
-                    help="Include the Groq LLM rerank step in the production-cascade eval. "
-                         "Requires GROQ_API_KEY[_2,_3] in env. Slower/costs API quota.")
+                    help="Also evaluate the LLM-augmented production cascade on a sampled "
+                         "subset (--eval-llm-sample) of test users. Requires GROQ_API_KEY[_2,_3] "
+                         "in env. The non-LLM production cascade is always evaluated on the "
+                         "full test set.")
+    ap.add_argument("--eval-llm-sample", type=int, default=200,
+                    help="When --eval-with-llm is set, evaluate LLM cascade on this many "
+                         "randomly-sampled test users (default 200 — ±0.02 NDCG CI, "
+                         "fits comfortably under Groq free-tier rate limits).")
     args = ap.parse_args()
     cfg = load_settings()
-    run(cfg, include_tier2=not args.no_tier2, eval_with_llm=args.eval_with_llm)
+    run(cfg, include_tier2=not args.no_tier2, eval_with_llm=args.eval_with_llm,
+        eval_llm_sample=args.eval_llm_sample)
 
 
 if __name__ == "__main__":

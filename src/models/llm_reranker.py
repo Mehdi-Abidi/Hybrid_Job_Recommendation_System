@@ -158,7 +158,8 @@ class LLMReranker:
 
     def _try_with_rotation(self, call):
         """Run `call(client)` with key rotation on rate-limit / auth errors.
-        Each key gets one attempt — if all keys exhaust we surface the last error."""
+        Each key gets one attempt — if all keys exhaust we surface the last error
+        so the caller (rerank) can fall through to pass-through gracefully."""
         if self._injected_client is not None:
             return call(self._injected_client)
         if self._rotator is None or not self._rotator.has_keys():
@@ -178,7 +179,7 @@ class LLMReranker:
                 if _is_rotatable_error(e, self.cfg.rotate_on_status) and self._rotator.rotate():
                     continue
                 raise
-        # All keys exhausted with rotatable errors.
+        # All keys exhausted — bubble up so rerank() falls back to pass-through.
         raise last_exc if last_exc is not None else RuntimeError("Groq rotation exhausted")
 
     # Re-rank top-K candidates and attach natural-language explanations.
@@ -214,9 +215,16 @@ class LLMReranker:
         out: list[tuple[int, float, str]] = []
         valid_ids = {int(c["job_id"]) for c in candidates}
         for item in ranked[:n]:
-            jid = int(item.get("job_id", -1))
+            # Defensive parsing: LLMs occasionally emit "-", null, or partial JSON
+            # under near-rate-limit conditions. Skip malformed rows; trust the
+            # rest of the response.
+            try:
+                jid = int(item.get("job_id", -1))
+                score = float(item.get("score", 0.0))
+            except (TypeError, ValueError):
+                continue
             if jid in valid_ids:
-                out.append((jid, float(item.get("score", 0.0)), str(item.get("reason", ""))))
+                out.append((jid, score, str(item.get("reason", ""))))
         # If parsing dropped everything, fall back so we never return an empty list when
         # we had candidates — the prior LTR ranking is a safe floor.
         if not out:
