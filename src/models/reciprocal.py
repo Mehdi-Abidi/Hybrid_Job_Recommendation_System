@@ -84,7 +84,7 @@ class JobToUserTower:
             hidden_dims=list(cfg.hidden_dims), emb_dim=cfg.embedding_dim, dropout=cfg.dropout,
         ).to(device)
         opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
-        log.info("ReciprocalTrainer (job→user) on %s, %d pairs", device, len(ds))
+        log.info("ReciprocalTrainer (job->user) on %s, %d pairs", device, len(ds))
 
         model.train()
         for ep in range(cfg.epochs):
@@ -123,7 +123,7 @@ class JobToUserTower:
         return self._embeddings(self.artifacts.job_feature_matrix, "job")
 
     # Recruiter-side dot products for one user against many jobs. Returns raw scores
-    # (pre-sigmoid). Unknown ids → 0.0, mirroring the forward tower's policy.
+    # (pre-sigmoid). Unknown ids -> 0.0, mirroring the forward tower's policy.
     def score_pairs(self, user_id: int, job_ids: list[int]) -> np.ndarray:
         if self.model is None:
             return np.zeros(len(job_ids), dtype=np.float32)
@@ -163,7 +163,7 @@ def _sigmoid(x: np.ndarray | float) -> np.ndarray:
 
 
 class BilateralScorer:
-    """Combines forward (user→job) and inverse (job→user) scores into a bilateral score.
+    """Combines forward (user->job) and inverse (job->user) scores into a bilateral score.
 
     Scoring policy: each direction's raw dot product is squashed with sigmoid into a
     pseudo-probability, and the bilateral score is their product. Multiplication
