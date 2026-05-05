@@ -119,6 +119,9 @@ def adapt_postings(postings_path: Path, ontology: SkillOntology,
     df = pd.read_csv(postings_path, low_memory=False)
     if max_jobs:
         df = df.head(max_jobs)
+    # Drop rows with missing or non-numeric job_ids — primary-key violations,
+    # rare but defensive against malformed source data.
+    df = df[pd.to_numeric(df["job_id"], errors="coerce").notna()].copy()
     log.info("Adapting %d LinkedIn postings", len(df))
 
     out = pd.DataFrame()
@@ -247,6 +250,7 @@ def adapt_train_rev1(path: Path, ontology: SkillOntology) -> pd.DataFrame:
     """Kaggle Train_rev1.csv -> jobs-schema DataFrame with real UK salary labels.
     Used as auxiliary training data for the salary predictor."""
     df = pd.read_csv(path, low_memory=False)
+    df = df[pd.to_numeric(df["Id"], errors="coerce").notna()].copy()
     log.info("Adapting %d Train_rev1 rows for salary training", len(df))
 
     out = pd.DataFrame()

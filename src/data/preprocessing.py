@@ -40,7 +40,11 @@ def _clean_users(df: pd.DataFrame) -> pd.DataFrame:
     df = df.drop_duplicates(subset=["user_id"]).copy()
     df["skills"] = df["skills"].fillna("").astype(str)
     df["resume_text"] = df["resume_text"].fillna("").astype(str)
-    df["experience_years"] = df["experience_years"].fillna(0).astype("int64").clip(lower=0)
+    # Coerce non-numeric to NaN, fill, clip to a sane career range. NER occasionally
+    # returns huge sentinel values from parse errors; bin_experience tolerates them
+    # but we cap here so downstream features (salary alignment) stay in-range too.
+    yrs = pd.to_numeric(df["experience_years"], errors="coerce").fillna(0)
+    df["experience_years"] = yrs.clip(lower=0, upper=60).astype("int64")
     return df.reset_index(drop=True)
 
 
