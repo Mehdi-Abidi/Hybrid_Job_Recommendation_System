@@ -261,7 +261,7 @@ def evaluate_all(cfg: Settings, data: ProcessedData, content, collab, popularity
 
 
 def run(cfg: Settings, include_tier2: bool = True, eval_with_llm: bool = False,
-        eval_llm_sample: int = 200) -> dict[str, Any]:
+        eval_llm_sample: int = 200, checkpoint_dir: str | None = None) -> dict[str, Any]:
     with tracking.run("rs-overhaul", run_name="full-train"):
         tracking.log_params({
             "split_strategy": cfg.split.strategy,
@@ -294,23 +294,52 @@ def run(cfg: Settings, include_tier2: bool = True, eval_with_llm: bool = False,
             except Exception:
                 pass
 
+        # Incremental checkpointing — saves each component to `checkpoint_dir`
+        # immediately after it's fit, so a Colab disconnect mid-training loses
+        # only the in-progress phase. checkpoint_dir is typically a Drive path
+        # like /content/drive/MyDrive/rs_checkpoints.
+        ckpt_root = Path(checkpoint_dir) if checkpoint_dir else None
+        if ckpt_root is not None:
+            ckpt_root.mkdir(parents=True, exist_ok=True)
+            log.info("Checkpointing intermediate artifacts to %s", ckpt_root)
+
+        def _ckpt(name: str, save_fn):
+            if ckpt_root is None:
+                return
+            try:
+                save_fn(ckpt_root / name)
+                log.info("Checkpointed %s -> %s", name, ckpt_root / name)
+            except Exception as e:
+                log.warning("Checkpoint of %s failed: %s", name, e)
+
         content, collab, popularity, hybrid = fit_classical(cfg, data, embedder)
+        _ckpt("content_based", content.save)
+        _ckpt("collaborative", collab.save)
+        _ckpt("popularity", popularity.save)
         _free_between_phases()
         two_tower, faiss_idx = fit_neural_retrieval(cfg, data, embedder)
+        _ckpt("two_tower", two_tower.save)
+        _ckpt("faiss", faiss_idx.save)
         # MiniLM has done its job (text encoding for content + two-tower) — drop it.
         # Frees ~120MB CPU and any cached GPU activations before bilateral / tier2 fit.
         embedder.release()
         _free_between_phases()
         bilateral = fit_reciprocal(cfg, data, two_tower)
+        _ckpt("reciprocal", bilateral.inv.save)
         _free_between_phases()
         # Tier 2 (BERT4Rec) and tier 3 (salary) train first so LTR can consume them.
         tier2 = fit_tier2(cfg, data) if include_tier2 else None
+        if tier2 and "bert4rec" in tier2:
+            _ckpt("bert4rec", tier2["bert4rec"].save)
         _free_between_phases()
         tier3 = fit_tier3(cfg, data)
+        _ckpt("ontology", tier3["ontology"].save)
+        _ckpt("salary", tier3["salary"].save)
         _free_between_phases()
         ltr = fit_ltr(cfg, data, content, collab, popularity, two_tower, bilateral,
                       hybrid=hybrid, bert4rec=(tier2 or {}).get("bert4rec"),
                       salary=(tier3 or {}).get("salary"))
+        _ckpt("ltr", ltr.save)
         _free_between_phases()
         save_artifacts(cfg, data=data, content=content, collab=collab, popularity=popularity,
                        hybrid=hybrid, two_tower=two_tower, faiss_idx=faiss_idx, ltr=ltr,
@@ -350,10 +379,14 @@ def main():
                     help="When --eval-with-llm is set, evaluate LLM cascade on this many "
                          "randomly-sampled test users (default 200 — ±0.02 NDCG CI, "
                          "fits comfortably under Groq free-tier rate limits).")
+    ap.add_argument("--checkpoint-dir", type=str, default=None,
+                    help="If set, save each model to this directory immediately after "
+                         "it's fit. Use a Drive path on Colab so a disconnect mid-train "
+                         "doesn't cost you the whole run.")
     args = ap.parse_args()
     cfg = load_settings()
     run(cfg, include_tier2=not args.no_tier2, eval_with_llm=args.eval_with_llm,
-        eval_llm_sample=args.eval_llm_sample)
+        eval_llm_sample=args.eval_llm_sample, checkpoint_dir=args.checkpoint_dir)
 
 
 if __name__ == "__main__":

@@ -147,7 +147,13 @@ class LTRRanker:
         jobs_indexed = jobs.set_index("job_id")
 
         X_parts, y_parts, group_sizes = [], [], []
-        for uid, g in train.sort_values("user_id").groupby("user_id", sort=False):
+        n_users_total = train["user_id"].nunique()
+        log.info("LTR: building feature matrix for %d users", n_users_total)
+        for u_i, (uid, g) in enumerate(train.sort_values("user_id").groupby("user_id", sort=False)):
+            if u_i > 0 and u_i % 200 == 0:
+                # Heartbeat every 200 users — Colab kills runtimes with no stdout
+                # for ~30 min, and this loop can run for ~50 min on real data.
+                log.info("LTR feature build: %d/%d users", u_i, n_users_total)
             positives = g["job_id"].astype(int).to_numpy()
             seen = set(int(j) for j in positives)
             n_pos = len(positives)
@@ -195,6 +201,8 @@ class LTRRanker:
         if len(groups) == 0 or X.shape[0] == 0:
             log.warning("LTR: no training pairs; booster not fit.")
             return self
+        log.info("LTR: built %d pairs over %d groups; starting xgb.train(%d rounds)",
+                 X.shape[0], len(groups), self.cfg.n_estimators)
         dtrain = xgb.DMatrix(X, label=y, feature_names=FEATURE_NAMES)
         dtrain.set_group(groups)
         params = {
@@ -202,7 +210,22 @@ class LTRRanker:
             "max_depth": self.cfg.max_depth, "verbosity": 0, "seed": self.cfg.seed,
             "tree_method": "hist",
         }
-        self.booster = xgb.train(params, dtrain, num_boost_round=self.cfg.n_estimators)
+
+        # Heartbeat callback — emits a log line every N rounds so Colab's
+        # watchdog sees stdout activity. Without this xgb.train can run silent
+        # for 30+ min on a 500-tree fit and trigger an idle disconnect.
+        class _Heartbeat(xgb.callback.TrainingCallback):
+            def __init__(self, every: int = 25):
+                self.every = every
+            def after_iteration(self, model, epoch, evals_log):
+                if epoch > 0 and epoch % self.every == 0:
+                    log.info("LTR boosting: round %d/%d", epoch, self.cfg_n_est)
+                return False
+
+        hb = _Heartbeat()
+        hb.cfg_n_est = self.cfg.n_estimators
+        self.booster = xgb.train(params, dtrain, num_boost_round=self.cfg.n_estimators,
+                                 callbacks=[hb])
         log.info("LTR fit: %d pairs, %d groups", X.shape[0], len(groups))
         return self
 
