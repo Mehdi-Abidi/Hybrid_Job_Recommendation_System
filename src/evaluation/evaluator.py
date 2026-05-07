@@ -73,7 +73,13 @@ class Evaluator:
         all_recs: list[list[int]] = []
         diversities: list[float] = []
 
-        for uid in users:
+        log.info("Eval %s: starting on %d users", model_name, len(users))
+        for u_i, uid in enumerate(users):
+            if u_i > 0 and u_i % 200 == 0:
+                # Heartbeat every 200 users — pipe.recommend over the test set
+                # has no other stdout, and Colab's watchdog can disconnect on
+                # silence stretches.
+                log.info("Eval %s: %d/%d users", model_name, u_i, len(users))
             relevant = self._relevant_by_user.get(int(uid), set())
             if not relevant:
                 continue
