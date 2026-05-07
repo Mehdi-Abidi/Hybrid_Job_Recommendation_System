@@ -1,189 +1,122 @@
 "use client";
+import { useEffect } from "react";
+import { useAppStore } from "@/lib/store";
+import { api } from "@/lib/api";
+import { AuroraHero } from "@/components/ui/aurora-hero";
+import { BentoStats } from "@/components/ui/bento-stats";
+import { SalaryHeatmap } from "@/components/ui/salary-heatmap";
+import { AIStrip } from "@/components/ui/ai-strip";
+import { FilterChips } from "@/components/ui/filter-chips";
+import { JobCard } from "@/components/ui/job-card";
+import { DetailPanel } from "@/components/ui/detail-panel";
+import { CultureStrip } from "@/components/ui/culture-strip";
+import { CareerSidebar } from "@/components/ui/career-sidebar";
+import { Home, Heart, CheckSquare, Mail } from "lucide-react";
 
-import React, { useState } from "react";
-import { AuroraBackground } from "@/components/ui/aurora-background";
-import { GlareCard } from "@/components/ui/glare-card";
-import { FloatingDock } from "@/components/ui/floating-dock";
-import { 
-  Briefcase, 
-  User, 
-  GitBranch, 
-  Sparkles, 
-  Search,
-  CheckCircle2,
-  XCircle,
-  ArrowRight
-} from "lucide-react";
-import { motion } from "framer-motion";
+const SALARY_ENTRIES = [
+  { company: "DeepMind", salary: 200 },
+  { company: "OpenAI", salary: 180 },
+  { company: "Anthropic", salary: 160 },
+  { company: "Cohere", salary: 140 },
+];
 
-export default function Home() {
-  const [activeJob, setActiveJob] = useState(0);
+export default function Page() {
+  const { userId, recommendations, setRecommendations, setLoading, isLoading, selectedJobId } = useAppStore();
 
-  const jobs = [
-    {
-      id: 1,
-      title: "Senior ML Engineer",
-      company: "Anthropic",
-      location: "San Francisco, CA (Remote)",
-      salary: "$190k - $240k",
-      match: "98%",
-      matchType: "Perfect Match",
-      reason: "Your deep expertise in PyTorch directly aligns with Anthropic's current LLM scaling requirements. Your background in distributed training systems perfectly fills their immediate skill gap.",
-      skills: [
-        { name: "PyTorch", status: "match" },
-        { name: "Distributed Systems", status: "match" },
-        { name: "Kubernetes", status: "adjacent", via: "Docker" }
-      ]
-    },
-    {
-      id: 2,
-      title: "Lead AI Architect",
-      company: "NeuroFlow",
-      location: "Remote",
-      salary: "$175k - $210k",
-      match: "94%",
-      matchType: "High Potential",
-      reason: "NeuroFlow is looking for leadership in generative models. Your recent transition from Senior ML Engineer suggests readiness for an Architect role.",
-      skills: [
-        { name: "NLP", status: "match" },
-        { name: "System Architecture", status: "match" },
-        { name: "Team Lead", status: "missing" }
-      ]
-    }
-  ];
+  useEffect(() => {
+    setLoading(true);
+    api.recommend(userId)
+      .then((res) => setRecommendations(res.recommendations))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [userId, setRecommendations, setLoading]);
 
-  const dockItems = [
-    { title: "Job Feed", icon: <Briefcase className="size-5" />, href: "#" },
-    { title: "Profile", icon: <User className="size-5" />, href: "#" },
-    { title: "Pipeline Inspector", icon: <GitBranch className="size-5" />, href: "#" },
-    { title: "Search (Cmd+K)", icon: <Search className="size-5" />, href: "#" },
-  ];
+  const topMatchPct = recommendations[0] ? Math.round(recommendations[0].score * 100) : 0;
+  const avgSalary = recommendations.length
+    ? Math.round(recommendations.reduce((s, r) => s + ((r.job.salary_min ?? 0) + (r.job.salary_max ?? 0)) / 2, 0) / recommendations.length / 1000)
+    : 178;
+
+  const aiMessage =
+    recommendations.length > 0
+      ? `Your skills match ${recommendations.length} roles today. Top pick: ${recommendations[0].job.title} at ${recommendations[0].job.company}.`
+      : "Analyzing your profile against today's openings…";
 
   return (
-    <AuroraBackground>
-      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center pt-20 pb-32">
-        
-        {/* Header / Omnibar Area */}
-        <motion.div 
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="absolute top-12 w-full max-w-2xl px-6"
-        >
-          <div className="flex items-center gap-4 bg-white/[0.05] border border-white/10 backdrop-blur-2xl rounded-full p-2 pl-6 shadow-2xl">
-            <Sparkles className="size-5 text-indigo-400" />
-            <input 
-              type="text" 
-              placeholder="Ask the AI for specific roles... (Cmd+K)" 
-              className="bg-transparent border-none text-white w-full focus:outline-none text-sm font-medium placeholder:text-white/40"
-            />
-            <button className="bg-white text-black px-4 py-1.5 rounded-full text-xs font-bold tracking-wide">
-              Search
-            </button>
+    <div style={{ minHeight: "100vh", background: "var(--bg)", display: "flex" }}>
+      {/* Sidebar nav */}
+      <div style={{ width: 52, flexShrink: 0, background: "#f5f9fd", borderRight: "1px solid var(--divider)", display: "flex", flexDirection: "column", alignItems: "center", padding: "14px 0", gap: 16 }}>
+        <div style={{ width: 30, height: 30, borderRadius: 9, background: "var(--sky)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 11, fontFamily: "'Space Grotesk', sans-serif" }}>N</div>
+        <div style={{ width: 20, height: 1, background: "var(--divider)" }} />
+        {[Home, Heart, CheckSquare, Mail].map((Icon, i) => (
+          <div key={i} style={{ width: 28, height: 28, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: i === 0 ? "var(--sky)" : "var(--muted)", background: i === 0 ? "var(--sky-light)" : "transparent", cursor: "pointer" }}>
+            <Icon size={14} />
           </div>
-        </motion.div>
-
-        {/* Spatial Carousel */}
-        <div className="w-full max-w-[1200px] flex items-center justify-center gap-12 mt-10">
-          
-          {/* Main Focused Card */}
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="w-[450px] h-[600px] z-20 perspective-1000"
-          >
-            <GlareCard className="w-full h-full flex flex-col p-8 group">
-              <div className="flex justify-between items-start mb-8">
-                <div>
-                  <h2 className="text-3xl font-bold tracking-tight text-white mb-2 group-hover:text-transparent group-hover:bg-clip-text group-hover:bg-gradient-to-r group-hover:from-white group-hover:to-white/60 transition-colors">
-                    {jobs[activeJob].title}
-                  </h2>
-                  <p className="text-lg text-indigo-300 font-medium">{jobs[activeJob].company}</p>
-                </div>
-                <div className="flex flex-col items-end">
-                  <div className="text-3xl font-black text-white">{jobs[activeJob].match}</div>
-                  <div className="text-xs font-bold uppercase tracking-widest text-teal-400 mt-1">{jobs[activeJob].matchType}</div>
-                </div>
-              </div>
-
-              <div className="space-y-4 mb-8">
-                <div className="flex items-center justify-between text-white/70 border-b border-white/10 pb-4">
-                  <span className="text-sm font-medium">Location</span>
-                  <span className="text-sm text-white">{jobs[activeJob].location}</span>
-                </div>
-                <div className="flex items-center justify-between text-white/70 border-b border-white/10 pb-4">
-                  <span className="text-sm font-medium">Predicted Salary</span>
-                  <span className="text-sm text-white font-medium">{jobs[activeJob].salary}</span>
-                </div>
-              </div>
-
-              <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-5 mb-8 backdrop-blur-sm shadow-inner relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500/50" />
-                <h3 className="text-xs font-bold text-indigo-300 uppercase tracking-wider mb-2">Bilateral Match Reasoning</h3>
-                <p className="text-sm text-white/80 leading-relaxed font-medium">
-                  {jobs[activeJob].reason}
-                </p>
-              </div>
-
-              <div className="mt-auto">
-                <button className="w-full py-4 rounded-xl bg-white text-black font-bold text-sm hover:bg-neutral-200 transition-all flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(255,255,255,0.3)] hover:shadow-[0_0_30px_rgba(255,255,255,0.5)]">
-                  Apply with 1-Click
-                  <ArrowRight className="size-4" />
-                </button>
-              </div>
-            </GlareCard>
-          </motion.div>
-
-          {/* Skill Constellation Graph (Abstracted visually for the panel) */}
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.2 }}
-            className="w-[350px] h-[500px] bg-white/[0.02] border border-white/10 rounded-[32px] p-6 backdrop-blur-2xl flex flex-col relative overflow-hidden"
-          >
-            {/* Ambient graph glow */}
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full bg-indigo-500/10 blur-[80px] rounded-full pointer-events-none" />
-            
-            <h3 className="text-lg font-bold text-white mb-6">Skill Constellation</h3>
-            
-            <div className="flex-1 flex flex-col justify-center gap-6 relative z-10">
-              {jobs[activeJob].skills.map((skill, i) => (
-                <div key={i} className="flex items-center gap-4 group cursor-default">
-                  <div className="relative">
-                    {skill.status === "match" ? (
-                      <CheckCircle2 className="size-6 text-teal-400 drop-shadow-[0_0_10px_rgba(45,212,191,0.5)]" />
-                    ) : skill.status === "missing" ? (
-                      <XCircle className="size-6 text-red-400 drop-shadow-[0_0_10px_rgba(248,113,113,0.5)]" />
-                    ) : (
-                      <div className="size-6 rounded-full border-2 border-indigo-400 border-dashed flex items-center justify-center">
-                        <div className="size-2 rounded-full bg-indigo-400" />
-                      </div>
-                    )}
-                    {/* Fake Beam effect */}
-                    {i !== jobs[activeJob].skills.length - 1 && (
-                      <div className="absolute top-6 left-1/2 -translate-x-1/2 w-[2px] h-6 bg-gradient-to-b from-white/20 to-transparent" />
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm font-bold text-white">{skill.name}</p>
-                    <p className="text-xs text-white/50 capitalize">
-                      {skill.status} {skill.via && `(via ${skill.via})`}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-6 pt-4 border-t border-white/10 relative z-10">
-              <p className="text-xs text-white/60 leading-relaxed text-center font-medium">
-                Your ontology nodes align perfectly. You are in the top 1% of applicants for this stack.
-              </p>
-            </div>
-          </motion.div>
-
-        </div>
+        ))}
+        <div style={{ width: 26, height: 26, borderRadius: "50%", background: "var(--sky)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700, color: "#fff", marginTop: "auto" }}>AM</div>
       </div>
 
-      <FloatingDock items={dockItems} />
-    </AuroraBackground>
+      {/* Main content */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        {/* Top bar */}
+        <div style={{ padding: "10px 16px", background: "var(--nav)", borderBottom: "1px solid var(--divider)", display: "flex", alignItems: "center" }}>
+          <span className="font-grotesk" style={{ fontSize: 13, fontWeight: 700, color: "var(--brand)" }}>NexusHire</span>
+          <div style={{ flex: 1, margin: "0 12px", background: "var(--sky-light)", borderRadius: 9, padding: "6px 12px", display: "flex", alignItems: "center", gap: 8 }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <span style={{ fontSize: 10.5, color: "var(--muted)", flex: 1 }}>Search jobs, companies…</span>
+            <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 5, background: "#fff", color: "var(--muted)", fontFamily: "monospace", border: "1px solid var(--divider)" }}>⌘K</span>
+          </div>
+          <div style={{ width: 26, height: 26, borderRadius: 7, background: "var(--amber-light)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, position: "relative" }}>
+            🔔
+            <div style={{ position: "absolute", top: 5, right: 5, width: 5, height: 5, borderRadius: "50%", background: "var(--sky)" }} />
+          </div>
+        </div>
+
+        {/* Scrollable area */}
+        <div style={{ flex: 1, overflowY: "auto" }}>
+          <AuroraHero userName="Ammar" matchCount={recommendations.length} />
+
+          {/* Bento + Salary heatmap */}
+          <div style={{ padding: "10px 14px 0", display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8 }}>
+            <SalaryHeatmap entries={SALARY_ENTRIES} targetSalary={140} />
+            <div style={{ gridColumn: "2", gridRow: "1" }}>
+              <BentoStats matchCount={recommendations.length} avgSalary={avgSalary} topMatchPct={topMatchPct} newCount={6} />
+            </div>
+          </div>
+
+          <AIStrip message={aiMessage} />
+          <FilterChips />
+
+          <div style={{ padding: "2px 14px 6px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontSize: 8.5, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--muted)" }}>
+              {isLoading ? "Loading…" : `${recommendations.length} matches · best fit first`}
+            </span>
+            <span className="font-grotesk" style={{ fontSize: 8.5, color: "var(--sky)", fontWeight: 600, cursor: "pointer" }}>↕ Relevance</span>
+          </div>
+
+          {/* Cards + right panels */}
+          <div style={{ display: "flex" }}>
+            {/* Job cards */}
+            <div style={{ flex: 1, padding: "0 14px 20px", display: "flex", flexDirection: "column", gap: 7 }}>
+              {isLoading
+                ? Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} style={{ background: "#fff", border: "1px solid var(--card-border)", borderRadius: 12, height: 110, opacity: 0.5 + i * 0.15 }} />
+                  ))
+                : recommendations.slice(0, 8).map((rec, i) => (
+                    <div key={rec.job.job_id}>
+                      <JobCard rec={rec} rank={i} isFeatured={i === 0} />
+                      {i === 0 && <CultureStrip applicantsRecent={5} />}
+                    </div>
+                  ))}
+            </div>
+
+            {/* Right panels */}
+            <div style={{ display: "flex", flexShrink: 0 }}>
+              {selectedJobId && <DetailPanel />}
+              <CareerSidebar />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
