@@ -14,16 +14,17 @@ export function AuroraHero({ userName = "there", matchCount = 0, onSearch }: Aur
   const orb3 = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let gsap: typeof import("gsap").gsap;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tweens: any[] = [];
     import("gsap").then(({ gsap: g }) => {
-      gsap = g;
       if (orb1.current)
-        gsap.to(orb1.current, { y: -14, scale: 1.06, duration: 6, yoyo: true, repeat: -1, ease: "sine.inOut" });
+        tweens.push(g.to(orb1.current, { y: -14, scale: 1.06, duration: 6, yoyo: true, repeat: -1, ease: "sine.inOut" }));
       if (orb2.current)
-        gsap.to(orb2.current, { y: -10, scale: 1.04, duration: 5, yoyo: true, repeat: -1, ease: "sine.inOut", delay: -2 });
+        tweens.push(g.to(orb2.current, { y: -10, scale: 1.04, duration: 5, yoyo: true, repeat: -1, ease: "sine.inOut", delay: -2 }));
       if (orb3.current)
-        gsap.to(orb3.current, { y: -8, scale: 1.08, duration: 7, yoyo: true, repeat: -1, ease: "sine.inOut", delay: -4 });
+        tweens.push(g.to(orb3.current, { y: -8, scale: 1.08, duration: 7, yoyo: true, repeat: -1, ease: "sine.inOut", delay: -4 }));
     });
+    return () => tweens.forEach((t) => t.kill());
   }, []);
 
   return (

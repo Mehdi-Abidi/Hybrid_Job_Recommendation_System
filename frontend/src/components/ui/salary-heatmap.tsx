@@ -7,7 +7,7 @@ interface SalaryHeatmapProps { entries: SalaryEntry[]; targetSalary?: number; }
 export function SalaryHeatmap({ entries, targetSalary = 140 }: SalaryHeatmapProps) {
   const max = Math.max(...entries.map((e) => e.salary));
   return (
-    <div style={{ background: "var(--card)", border: "1px solid var(--card-border)", borderRadius: 14, padding: "12px 14px", gridColumn: "span 2", position: "relative", overflow: "hidden" }}>
+    <div style={{ background: "var(--card)", border: "1px solid var(--card-border)", borderRadius: 14, padding: "12px 14px", position: "relative", overflow: "hidden" }}>
       {/* Subtle amber orb accent */}
       <div style={{ position: "absolute", right: -20, top: -20, width: 100, height: 100, borderRadius: "50%", background: "radial-gradient(circle, rgba(245,158,11,0.1), transparent 70%)", pointerEvents: "none" }} />
       <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>

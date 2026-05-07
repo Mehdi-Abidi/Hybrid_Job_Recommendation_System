@@ -36,14 +36,17 @@ export function JobCard({ rec, rank, isFeatured }: JobCardProps) {
 
   // Card entrance animation
   useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let tween: any;
     import("gsap").then(({ gsap }) => {
       if (!cardRef.current) return;
-      gsap.from(cardRef.current, {
+      tween = gsap.from(cardRef.current, {
         opacity: 0, y: 10, duration: 0.45,
         delay: rank * 0.06,
         ease: "back.out(1.5)",
       });
     });
+    return () => tween?.kill();
   }, [rank]);
 
   const salaryStr = job.salary_min && job.salary_max
