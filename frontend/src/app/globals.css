@@ -1,34 +1,83 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Instrument+Serif:ital@0;1&display=swap');
 
 :root {
-  --background: #050505;
-  --foreground: #ededed;
-  --black: #050505;
-  --white: #ffffff;
-  --transparent: transparent;
+  --sky: #0284c7;
+  --sky-light: #e0f2fe;
+  --sky-mid: #bae6fd;
+  --sky-dark: #0369a1;
+  --amber: #f59e0b;
+  --amber-light: #fef3c7;
+  --amber-mid: #fde68a;
+  --amber-dark: #b45309;
+
+  --bg: #f0f8ff;
+  --nav: #ffffff;
+  --brand: #0c1a2e;
+  --muted: #94a3b8;
+  --card: #ffffff;
+  --card-border: rgba(2, 132, 199, 0.12);
+  --card-shadow: rgba(2, 132, 199, 0.1);
+  --positive: #16a34a;
+  --divider: rgba(2, 132, 199, 0.1);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg);
+  color: var(--brand);
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-@keyframes aurora {
-  from {
-    background-position: 50% 50%, 50% 50%;
-  }
-  to {
-    background-position: 350% 50%, 350% 50%;
-  }
+@keyframes orb-float {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-14px) scale(1.05); }
+}
+@keyframes aurora-shift {
+  0%   { filter: hue-rotate(0deg) saturate(1); }
+  50%  { filter: hue-rotate(8deg) saturate(1.15); }
+  100% { filter: hue-rotate(-5deg) saturate(0.95); }
 }
 
-.animate-aurora {
-  animation: aurora 60s linear infinite;
+@keyframes shimmer { 0% { left: -100%; } 100% { left: 200%; } }
+
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
+
+@keyframes bar-grow {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+@keyframes bar-up {
+  from { height: 0; }
+  to   { height: var(--h, 50%); }
+}
+
+.font-grotesk { font-family: 'Space Grotesk', sans-serif; }
+.font-serif   { font-family: 'Instrument Serif', serif; }
+
+.spotlight-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    280px circle at var(--mx, 50%) var(--my, 50%),
+    rgba(2, 132, 199, 0.09),
+    transparent 60%
+  );
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+  z-index: 0;
+}
+.spotlight-card:hover::before { opacity: 1; }
+
+@keyframes glow-rotate { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
