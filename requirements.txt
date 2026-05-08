@@ -1,0 +1,39 @@
+# Core
+pandas
+numpy
+scipy
+scikit-learn
+pyyaml
+python-dotenv
+
+# Classical RS (SVD uses scipy.sparse.linalg.svds — no scikit-surprise dep)
+sentence-transformers
+joblib
+
+# Neural RS (Tier 1-2)
+torch
+faiss-cpu
+xgboost
+
+# NLP / Domain (Tier 3)
+spacy
+pypdf
+networkx
+
+# LLM (Azure OpenAI)
+openai
+
+# API + UI
+fastapi
+uvicorn
+streamlit
+httpx
+
+# Viz
+matplotlib
+seaborn
+wordcloud
+
+# Testing
+pytest
+pytest-cov
