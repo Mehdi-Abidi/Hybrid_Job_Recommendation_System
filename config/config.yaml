@@ -22,7 +22,7 @@ ratings:
 
 split:
   test_size: 0.2
-  strategy: time_based  # global temporal cutoff prevents 20-50% leakage bias (Ji et al. TOIS 2023)
+  strategy: per_user    # per-user split: each user has both train and test interactions, so test jobs appear in retrieval candidates
   seed: 42
 
 models:
