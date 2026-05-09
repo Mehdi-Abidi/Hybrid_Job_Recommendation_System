@@ -283,7 +283,7 @@ def build_real_dataset(raw_dir: Path, out_dir: Path, ontology: SkillOntology | N
 
     jobs = adapt_postings(raw_dir / "postings.csv", ontology, max_jobs=max_jobs)
     users = adapt_resumes(raw_dir / "Resume.csv", ontology, jobs, seed=seed)
-    interactions = synthesize_interactions(users, jobs, seed=seed)
+    interactions = synthesize_interactions(users, jobs, avg_per_user=30, seed=seed)
 
     paths = {
         "jobs": out_dir / "jobs.csv",

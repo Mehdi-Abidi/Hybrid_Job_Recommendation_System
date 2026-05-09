@@ -197,12 +197,15 @@ def evaluate_all(cfg: Settings, data: ProcessedData, content, collab, popularity
         # gives the headline metric. The LLM rerank's job is per-query polish,
         # not metric movement, and Groq's free-tier rate limit makes full-set
         # LLM eval impractical (~28 min best case, regularly 429s out).
+        # During eval, disable the active-job age filter (max_posted_days=None) so
+        # synthesized test jobs aren't silently dropped before they can be recalled.
+        # n_final=20 matches max k_value so every eval slot is fillable.
         pipe_nollm = MultiStagePipeline(
             PipelineStages(two_tower=two_tower, faiss=faiss_idx, content=content,
                            collab=collab, popularity=popularity, ltr=ltr, llm=None,
                            bilateral=bilateral),
             users=data.users, jobs=data.jobs, user_history=user_history_set,
-            n_retrieve=500, n_rank=20, n_final=10,
+            n_retrieve=500, n_rank=50, n_final=20, max_posted_days=None,
         )
         models_full: dict[str, Any] = {
             "production": lambda u, k: [
@@ -233,7 +236,7 @@ def evaluate_all(cfg: Settings, data: ProcessedData, content, collab, popularity
                                collab=collab, popularity=popularity, ltr=ltr, llm=llm,
                                bilateral=bilateral),
                 users=data.users, jobs=data.jobs, user_history=user_history_set,
-                n_retrieve=500, n_rank=20, n_final=10,
+                n_retrieve=500, n_rank=50, n_final=20, max_posted_days=None,
             )
             test_users = list(data.test["user_id"].unique())
             rng = np.random.default_rng(cfg.split.seed)
